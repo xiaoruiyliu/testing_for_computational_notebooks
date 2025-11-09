@@ -1,4 +1,4 @@
 Testing
 ==================
 
-An extension that supports testing in computational notebooks.
+An extension for Juypter Notebooks that supports a novel testing interaction in computational notebooks. 
