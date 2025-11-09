@@ -4,7 +4,7 @@ Name: Testing
 Main: main.js
 Link: README.md
 Description: |
-  Demo extension to add a default cell with code.
+  An extension that supports some testing capabilities.
 
 Parameters:
 - none
