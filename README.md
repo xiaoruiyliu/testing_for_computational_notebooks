@@ -1,4 +1,4 @@
-# Testing
+# Testing for computational notebooks
 An extension for Jupyter Notebooks that supports a novel testing interaction in computational notebooks.
 
 ## Source attribution
