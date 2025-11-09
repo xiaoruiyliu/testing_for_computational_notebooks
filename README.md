@@ -21,6 +21,7 @@ $ conda install -c conda-forge jupyter_contrib_nbextensions
 $ pip show jupyter_contrib_nbextensions
 ```
 This shows you where the package is installed. Look for the `Location:` line in the output.
+Navigate to the nbextensions folder and clone this repository. Your final file structure should resemble the following.
 ```
 # Your File Structure Should Look Like This:
 /Users/username/anaconda3/envs/jupyterexperiments/lib/python3.11/site-packages/
@@ -32,14 +33,14 @@ This shows you where the package is installed. Look for the `Location:` line in 
 ```
 
 ### 3) Install and enable the extension
-Navigate to the nbextensions folder. Then, run the following: 
+Stay in the nbextensions folder. Then, run the following: 
 ```
 $ jupyter nbextension install testing_for_computational_notebooks --user
 $ jupyter nbextension enable testing_for_computational_notebooks/main
 ```
 
 ### 4) Open a notebook
-Then, open a notebook. This can be done through a locally hosted notebook by clicking the "New --> Python 3 (ipykernel)" widget.
+Finally, open a notebook. This can be done through a locally hosted notebook by clicking the "New --> Python 3 (ipykernel)" widget.
 ```
 $ jupyter notebook
 ```
