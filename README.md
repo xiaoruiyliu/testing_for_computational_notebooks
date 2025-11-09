@@ -7,7 +7,7 @@ This system was created using the Cursor IDE, which has an embedded AI-backed pr
 
 ## Running a Custom Jupyter Notebook Extension
 
-Apologies to the unlucky grader in advance, but running a custom extension will require some set-up. Feel free to email me at xrl@seas.upenn.edu so I can show the extension on my system if you run into any issues. This installation guide follows the resource linked above.
+Apologies to the unlucky grader in advance, but running a custom extension will require some set-up. Feel free to email me at xrl@seas.upenn.edu so I can show the extension on my system if you run into any issues. This installation guide is based on the resource linked above.
 
 ### 1) Create a new conda virtual environment 
 ```
