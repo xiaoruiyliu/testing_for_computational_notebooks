@@ -40,7 +40,7 @@ $ jupyter nbextension enable testing_for_computational_notebooks/main
 ```
 
 ### 4) Open a notebook
-Finally, open a notebook. This can be done through a locally hosted notebook by clicking the "New --> Python 3 (ipykernel)" widget.
+Finally, open a notebook. This can be done through a locally hosted notebook by clicking the "New --> Python 3 (ipykernel)" widget after running the command below. 
 ```
 $ jupyter notebook
 ```
