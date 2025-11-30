@@ -98,12 +98,12 @@ define([
         applyStyles(listItem, Constants.STYLES.LIST_ITEM);
         listItem.css('font-family', Constants.STYLES.FONT_FAMILY);
         
-        // Create name span
+        // Create name span with code font
         var nameSpan = $('<span>')
             .css({
                 'flex': '1',
                 'color': testEnabled ? '#333' : '#999',
-                'font-family': Constants.STYLES.FONT_FAMILY,
+                'font-family': 'Monaco, Menlo, "Courier New", monospace',
                 'text-decoration': testEnabled ? 'none' : 'line-through'
             })
             .text(testName);

@@ -112,25 +112,31 @@ define(function() {
                 fontSize: '13px'
             },
             
-            // Test indicator boxes
+            // Test indicator boxes - styled like cell outputs
             TEST_PASSED: {
                 backgroundColor: '#d4edda',
                 border: '1px solid #28a745',
-                borderRadius: '4px',
-                padding: '10px',
-                margin: '10px 0',
+                borderLeft: '4px solid #28a745', // Accent border
+                borderRadius: '0px', // Sharp edges
+                padding: '8px 12px', // Match cell output padding
+                margin: '0px', // No margin, align with cells
                 color: '#155724',
-                fontSize: '13px'
+                fontSize: '13px',
+                width: '100%', // Match cell output width
+                boxSizing: 'border-box' // Include padding/border in width
             },
             
             TEST_FAILED: {
                 backgroundColor: '#f8d7da',
                 border: '1px solid #dc3545',
-                borderRadius: '4px',
-                padding: '10px',
-                margin: '10px 0',
+                borderLeft: '4px solid #dc3545', // Accent border
+                borderRadius: '0px', // Sharp edges
+                padding: '8px 12px', // Match cell output padding
+                margin: '0px', // No margin, align with cells
                 color: '#721c24',
-                fontSize: '13px'
+                fontSize: '13px',
+                width: '100%', // Match cell output width
+                boxSizing: 'border-box' // Include padding/border in width
             }
         },
 
@@ -240,7 +246,7 @@ import re
 import ast
 import sys
 
-result = {'passed': False, 'failed': False, 'test_name': '', 'debug': []}
+results = []  # List to store all test results
 cell_code = """${cellCode.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"""
 
 # Debug output helper
@@ -439,27 +445,66 @@ if 'tests' in globals():
         
         if should_run:
             debug_log("Test " + str(test_name) + " - EXECUTING TEST")
+            
+            # Check if test involves DataFrame or Series
+            is_dataframe_or_series = False
+            try:
+                # Try to import pandas
+                import pandas as pd
+                
+                # Get base variables from test logic
+                test_vars_to_check = list(test_base_vars)
+                
+                # Check each variable to see if it's a DataFrame or Series
+                for var_name in test_vars_to_check:
+                    if var_name in globals():
+                        var_value = globals()[var_name]
+                        if isinstance(var_value, pd.DataFrame) or isinstance(var_value, pd.Series):
+                            is_dataframe_or_series = True
+                            debug_log("Test " + str(test_name) + " - Found DataFrame/Series variable: " + str(var_name))
+                            break
+            except ImportError:
+                # pandas not available, skip check
+                debug_log("pandas not available, skipping DataFrame/Series check")
+            except Exception as e:
+                debug_log("Error checking for DataFrame/Series: " + str(e))
+            
             try:
                 # Execute the test logic in the current global namespace
                 exec(test_logic, globals())
                 # If no exception was raised, test passed
-                result['passed'] = True
-                result['test_name'] = test_name
-                break  # Stop at first pass (passed takes precedence)
+                test_result = {
+                    'passed': True,
+                    'failed': False,
+                    'test_name': test_name,
+                    'test_code': test_logic,
+                    'is_dataframe_or_series': is_dataframe_or_series
+                }
+                results.append(test_result)
             except AssertionError as e:
                 # Assertion failed - test failed
-                result['failed'] = True
-                result['test_name'] = test_name
-                # Don't break - keep checking in case another test passes
+                test_result = {
+                    'passed': False,
+                    'failed': True,
+                    'test_name': test_name,
+                    'test_code': test_logic,
+                    'is_dataframe_or_series': is_dataframe_or_series
+                }
+                results.append(test_result)
             except Exception as e:
                 # Other errors also count as failure
-                result['failed'] = True
-                result['test_name'] = test_name
-                # Don't break - keep checking in case another test passes
+                test_result = {
+                    'passed': False,
+                    'failed': True,
+                    'test_name': test_name,
+                    'test_code': test_logic,
+                    'is_dataframe_or_series': is_dataframe_or_series
+                }
+                results.append(test_result)
 else:
     debug_log("No 'tests' dictionary found in globals")
 
-print(json.dumps(result))
+print(json.dumps(results))
 `,
 
             FETCH_TEST_NAMES: `
