@@ -90,7 +90,10 @@ define([
     /**
      * Create a list item for a test name
      */
-    function createTestNameListItem(testName, deleteCallback) {
+    function createTestNameListItem(test, deleteCallback, toggleCallback, editCallback) {
+        var testName = test.name || test;
+        var testEnabled = test.enabled !== undefined ? test.enabled : true;
+        
         var listItem = $('<div>');
         applyStyles(listItem, Constants.STYLES.LIST_ITEM);
         listItem.css('font-family', Constants.STYLES.FONT_FAMILY);
@@ -99,16 +102,165 @@ define([
         var nameSpan = $('<span>')
             .css({
                 'flex': '1',
-                'color': '#333',
-                'font-family': Constants.STYLES.FONT_FAMILY
+                'color': testEnabled ? '#333' : '#999',
+                'font-family': Constants.STYLES.FONT_FAMILY,
+                'text-decoration': testEnabled ? 'none' : 'line-through'
             })
             .text(testName);
         
+        // Create controls container
+        var controlsContainer = $('<div>')
+            .css({
+                'display': 'flex',
+                'align-items': 'center',
+                'gap': '6px',
+                'height': '20px'
+            });
+        
+        // Create toggle switch (smaller to match button sizes)
+        var toggleContainer = $('<label>')
+            .css({
+                'position': 'relative',
+                'display': 'inline-block',
+                'width': '36px',
+                'height': '18px',
+                'vertical-align': 'middle',
+                'margin': '0'
+            });
+        
+        var toggleInput = $('<input>')
+            .attr('type', 'checkbox')
+            .prop('checked', testEnabled)
+            .css({
+                'opacity': '0',
+                'width': '0',
+                'height': '0'
+            });
+        
+        var toggleSlider = $('<span>')
+            .css({
+                'position': 'absolute',
+                'cursor': 'pointer',
+                'top': '0',
+                'left': '0',
+                'right': '0',
+                'bottom': '0',
+                'background-color': testEnabled ? '#28a745' : '#ccc',
+                'transition': '.4s',
+                'border-radius': '18px'
+            })
+            .html('&nbsp;');
+        
+        var toggleSliderBefore = $('<span>')
+            .css({
+                'position': 'absolute',
+                'content': '""',
+                'height': '14px',
+                'width': '14px',
+                'left': '2px',
+                'bottom': '2px',
+                'background-color': 'white',
+                'transition': '.4s',
+                'border-radius': '50%',
+                'transform': testEnabled ? 'translateX(18px)' : 'translateX(0)'
+            });
+        
+        toggleSlider.append(toggleSliderBefore);
+        toggleContainer.append(toggleInput);
+        toggleContainer.append(toggleSlider);
+        
+        toggleInput.change(function() {
+            var newEnabled = $(this).is(':checked');
+            var $toggle = $(this);
+            var $slider = $toggle.siblings('span');
+            var $sliderBefore = $slider.find('span');
+            var $nameSpan = listItem.find('span').first();
+            
+            // Update visual state immediately for better UX
+            if (newEnabled) {
+                $slider.css('background-color', '#28a745');
+                $sliderBefore.css('transform', 'translateX(18px)');
+                $nameSpan.css({
+                    'color': '#333',
+                    'text-decoration': 'none'
+                });
+            } else {
+                $slider.css('background-color', '#ccc');
+                $sliderBefore.css('transform', 'translateX(0)');
+                $nameSpan.css({
+                    'color': '#999',
+                    'text-decoration': 'line-through'
+                });
+            }
+            
+            // Update in Python
+            if (toggleCallback) {
+                toggleCallback(testName, newEnabled);
+            }
+        });
+        
+        // Create edit button
+        var editButton = $('<button>')
+            .html('✎')
+            .attr('title', 'Edit test')
+            .css({
+                'background': 'none',
+                'border': 'none',
+                'font-size': '14px',
+                'cursor': 'pointer',
+                'color': '#007bff',
+                'padding': '0',
+                'width': '24px',
+                'height': '20px',
+                'line-height': '20px',
+                'border-radius': '2px',
+                'font-family': Constants.STYLES.FONT_FAMILY,
+                'display': 'flex',
+                'align-items': 'center',
+                'justify-content': 'center'
+            })
+            .hover(
+                function() {
+                    $(this).css({
+                        'color': '#0056b3',
+                        'background-color': '#e7f3ff'
+                    });
+                },
+                function() {
+                    $(this).css({
+                        'color': '#007bff',
+                        'background-color': 'transparent'
+                    });
+                }
+            )
+            .click(function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (editCallback) {
+                    editCallback(testName, test.code || '');
+                }
+                return false;
+            });
+        
         // Create delete button
         var deleteButton = $('<button>')
-            .html('&times;');
-        applyStyles(deleteButton, Constants.STYLES.DELETE_BUTTON);
-        deleteButton.css('font-family', Constants.STYLES.FONT_FAMILY);
+            .html('&times;')
+            .css({
+                'background': 'none',
+                'border': 'none',
+                'font-size': '16px',
+                'cursor': 'pointer',
+                'color': '#999',
+                'padding': '0',
+                'width': '24px',
+                'height': '20px',
+                'line-height': '20px',
+                'border-radius': '2px',
+                'font-family': Constants.STYLES.FONT_FAMILY,
+                'display': 'flex',
+                'align-items': 'center',
+                'justify-content': 'center'
+            });
         
         deleteButton.hover(
             function() {
@@ -126,15 +278,18 @@ define([
         ).click(function(e) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('Delete button clicked for:', testName);
             if (deleteCallback) {
                 deleteCallback(testName);
             }
             return false;
         });
         
+        controlsContainer.append(toggleContainer);
+        controlsContainer.append(editButton);
+        controlsContainer.append(deleteButton);
+        
         listItem.append(nameSpan);
-        listItem.append(deleteButton);
+        listItem.append(controlsContainer);
         
         return listItem;
     }
@@ -142,17 +297,35 @@ define([
     /**
      * Display test names in the list container
      */
-    function displayTestNamesList(testNames) {
+    function displayTestNamesList(testData) {
         var listContainer = $('#' + Constants.IDS.TEST_NAMES_LIST);
         listContainer.empty();
         
-        if (testNames.length === 0) {
+        // Handle both old format (array of strings) and new format (array of objects)
+        var tests = [];
+        if (testData && testData.length > 0) {
+            if (typeof testData[0] === 'string') {
+                // Old format - convert to new format
+                testData.forEach(function(testName) {
+                    tests.push({
+                        name: testName,
+                        code: '',
+                        enabled: true
+                    });
+                });
+            } else {
+                // New format
+                tests = testData;
+            }
+        }
+        
+        if (tests.length === 0) {
             listContainer.append(createEmptyMessage());
             return;
         }
         
-        testNames.forEach(function(testName) {
-            var listItem = createTestNameListItem(testName, deleteTestName);
+        tests.forEach(function(test) {
+            var listItem = createTestNameListItem(test, deleteTestName, toggleTest, editTest);
             listContainer.append(listItem);
         });
     }
@@ -227,16 +400,16 @@ define([
                                 var trimmed = outputText.trim();
                                 console.log('Delete output text:', trimmed);
                                 if (trimmed) {
-                                    var testNames = JSON.parse(trimmed);
-                                    console.log('Parsed test names after delete:', testNames);
-                                    // Update UI with the result
-                                    displayTestNamesList(testNames);
+                                    var testData = JSON.parse(trimmed);
+                                    console.log('Parsed test data after delete:', testData);
+                                    // Update UI with the result (now in new format)
+                                    displayTestNamesList(testData);
                                 } else {
                                     // Empty output, refresh to get current state
                                     updateTestNamesFromPython();
                                 }
                             } catch(e) {
-                                console.log('Error parsing test names after delete:', e, 'Output:', outputText);
+                                console.log('Error parsing test data after delete:', e, 'Output:', outputText);
                                 // Refresh from Python if parsing fails
                                 updateTestNamesFromPython();
                             }
@@ -302,6 +475,375 @@ define([
     }
 
     /**
+     * Check if the test names widget is currently open/visible
+     */
+    function isWidgetOpen() {
+        var widget = $('#' + Constants.IDS.TEST_NAMES_OVERLAY);
+        return widget.length > 0 && widget.is(':visible');
+    }
+
+    /**
+     * Refresh the widget if it's open
+     * This is called automatically when the tests dictionary might have changed
+     */
+    function refreshIfOpen() {
+        if (isWidgetOpen()) {
+            // Debounce rapid updates - only refresh if last update was > 300ms ago
+            if (!refreshIfOpen.lastUpdate || (Date.now() - refreshIfOpen.lastUpdate) > 300) {
+                refreshIfOpen.lastUpdate = Date.now();
+                updateTestNamesFromPython();
+            }
+        }
+    }
+
+    /**
+     * Toggle a test on/off
+     */
+    function toggleTest(testName, enabled) {
+        if (!Jupyter.notebook.kernel) {
+            console.log('Kernel not available');
+            return;
+        }
+        
+        var testNameJson = JSON.stringify(testName);
+        var enabledJson = JSON.stringify(enabled);
+        var toggleCode = Constants.PYTHON_TEMPLATES.TOGGLE_TEST(testNameJson, enabledJson);
+        
+        Jupyter.notebook.kernel.execute(
+            toggleCode,
+            {
+                iopub: {
+                    output: function(msg) {
+                        if (msg.content && msg.content.name === 'stdout') {
+                            try {
+                                var result = JSON.parse(msg.content.text.trim());
+                                if (result.success) {
+                                    // Refresh the list to show updated status
+                                    updateTestNamesFromPython();
+                                }
+                            } catch(e) {
+                                console.log('Error parsing toggle result:', e);
+                            }
+                        }
+                    }
+                }
+            },
+            {silent: false, store_history: false}
+        );
+    }
+
+    /**
+     * Edit test code
+     */
+    function editTest(testName, currentCode) {
+        // Fetch test code if not provided
+        if (!currentCode && Jupyter.notebook.kernel) {
+            var testNameJson = JSON.stringify(testName);
+            var fetchCode = Constants.PYTHON_TEMPLATES.FETCH_TEST_DATA(testNameJson);
+            
+            Jupyter.notebook.kernel.execute(
+                fetchCode,
+                {
+                    iopub: {
+                        output: function(msg) {
+                            if (msg.content && msg.content.name === 'stdout') {
+                                try {
+                                    var testData = JSON.parse(msg.content.text.trim());
+                                    if (testData.error) {
+                                        console.log('Error fetching test data:', testData.error);
+                                        showEditModal(testName, '');
+                                    } else {
+                                        showEditModal(testName, testData.code || '');
+                                    }
+                                } catch(e) {
+                                    console.log('Error parsing test data:', e);
+                                    showEditModal(testName, currentCode || '');
+                                }
+                            }
+                        }
+                    }
+                },
+                {silent: false, store_history: false}
+            );
+            return;
+        }
+        
+        showEditModal(testName, currentCode || '');
+    }
+
+    /**
+     * Show the edit modal
+     */
+    function showEditModal(testName, currentCode) {
+        // Remove existing edit modal if it exists
+        $('#test-edit-modal').remove();
+        
+        // Create modal overlay
+        var modal = $('<div>')
+            .attr('id', 'test-edit-modal')
+            .css({
+                'position': 'fixed',
+                'top': '0',
+                'left': '0',
+                'width': '100%',
+                'height': '100%',
+                'background-color': 'rgba(0, 0, 0, 0.5)',
+                'z-index': '10001',
+                'display': 'flex',
+                'justify-content': 'center',
+                'align-items': 'center'
+            });
+        
+        // Prevent all keyboard events from reaching the notebook
+        modal.on('keydown keyup keypress', function(e) {
+            e.stopPropagation();
+        });
+        
+        // Create modal content (standardized styling)
+        var modalContent = $('<div>')
+            .css({
+                'background-color': 'white',
+                'border-radius': '2px',
+                'padding': '20px',
+                'width': '600px',
+                'max-width': '90%',
+                'max-height': '80vh',
+                'display': 'flex',
+                'flex-direction': 'column',
+                'font-family': Constants.STYLES.FONT_FAMILY,
+                'border': '1px solid #ddd',
+                'box-shadow': '0 2px 8px rgba(0, 0, 0, 0.15)'
+            });
+        
+        // Prevent clicks inside modal from closing it
+        modalContent.on('click', function(e) {
+            e.stopPropagation();
+        });
+        
+        // Header
+        var header = $('<div>')
+            .css({
+                'display': 'flex',
+                'justify-content': 'space-between',
+                'align-items': 'center',
+                'margin-bottom': '12px',
+                'border-bottom': '1px solid #eee',
+                'padding-bottom': '8px'
+            });
+        
+        var title = $('<h3>')
+            .css({
+                'margin': '0',
+                'font-size': '16px',
+                'font-weight': '500',
+                'color': '#333',
+                'font-family': Constants.STYLES.FONT_FAMILY
+            })
+            .text('Edit Test: ' + testName);
+        
+        var closeBtn = $('<button>')
+            .html('&times;')
+            .css({
+                'background': 'none',
+                'border': 'none',
+                'font-size': '24px',
+                'cursor': 'pointer',
+                'color': '#999',
+                'padding': '0',
+                'width': '30px',
+                'height': '30px'
+            })
+            .click(function() {
+                modal.remove();
+            });
+        
+        header.append(title);
+        header.append(closeBtn);
+        
+        // Textarea for code (standardized with instantiation widget)
+        var codeTextarea = $('<textarea>')
+            .val(currentCode || '')
+            .css({
+                'width': '100%',
+                'height': '300px',
+                'font-family': 'Monaco, Menlo, "Courier New", monospace',
+                'font-size': '13px',
+                'padding': '10px',
+                'border': '1px solid #ddd',
+                'border-radius': '2px',
+                'resize': 'vertical',
+                'flex': '1',
+                'margin': '0px',
+                'box-sizing': 'border-box'
+            })
+            .attr('placeholder', 'Test logic (Python code)...');
+        
+        // Prevent notebook keyboard manager from handling events in modal
+        var originalEnabled = Jupyter.keyboard_manager ? Jupyter.keyboard_manager.enabled : true;
+        if (Jupyter.keyboard_manager) {
+            Jupyter.keyboard_manager.disable();
+        }
+        
+        // Additional keyboard event blocker at document level when modal is focused
+        var preventNotebookKeys = function(e) {
+            // Only prevent if modal is visible and event target is within modal
+            var target = $(e.target);
+            if (modal.is(':visible') && (modal.has(target).length > 0 || modal[0] === target[0] || modalContent[0] === target[0])) {
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                return false;
+            }
+        };
+        
+        // Re-enable keyboard manager when modal closes
+        var cleanup = function() {
+            // Remove document-level event listeners
+            $(document).off('keydown.modal-keyboard keyup.modal-keyboard keypress.modal-keyboard');
+            
+            if (Jupyter.keyboard_manager && originalEnabled) {
+                Jupyter.keyboard_manager.enable();
+            }
+            modal.off('keydown keyup keypress');
+            modal.remove();
+        };
+        
+        // Add event listeners to prevent notebook keyboard shortcuts
+        $(document).on('keydown.modal-keyboard', preventNotebookKeys);
+        $(document).on('keyup.modal-keyboard', preventNotebookKeys);
+        $(document).on('keypress.modal-keyboard', preventNotebookKeys);
+        
+        // Isolate keyboard events - prevent them from reaching notebook
+        codeTextarea.on('keydown keyup keypress', function(e) {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return true;
+        });
+        
+        // Prevent Esc key from triggering notebook shortcuts
+        codeTextarea.on('keydown', function(e) {
+            if (e.keyCode === 27 || e.key === 'Escape') { // Esc key
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                cleanup();
+                return false;
+            }
+        });
+        
+        // Also capture events at modal level
+        modalContent.on('keydown keyup keypress', function(e) {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return true;
+        });
+        
+        // Buttons
+        var buttons = $('<div>')
+            .css({
+                'display': 'flex',
+                'justify-content': 'flex-end',
+                'gap': '10px',
+                'margin-top': '15px'
+            });
+        
+        var cancelBtn = $('<button>')
+            .text('Cancel')
+            .css({
+                'padding': '8px 16px',
+                'border': '1px solid #ddd',
+                'background': 'white',
+                'border-radius': '2px',
+                'cursor': 'pointer',
+                'font-family': Constants.STYLES.FONT_FAMILY
+            });
+        
+        var saveBtn = $('<button>')
+            .text('Save')
+            .css({
+                'padding': '8px 16px',
+                'border': 'none',
+                'background': '#007bff',
+                'color': 'white',
+                'border-radius': '2px',
+                'cursor': 'pointer',
+                'font-family': Constants.STYLES.FONT_FAMILY
+            });
+        
+        buttons.append(cancelBtn);
+        buttons.append(saveBtn);
+        
+        modalContent.append(header);
+        modalContent.append(codeTextarea);
+        modalContent.append(buttons);
+        modal.append(modalContent);
+        
+        // Close on background click
+        modal.click(function(e) {
+            if ($(e.target).attr('id') === 'test-edit-modal') {
+                cleanup();
+            }
+        });
+        
+        closeBtn.off('click').click(cleanup);
+        cancelBtn.click(cleanup);
+        saveBtn.click(function() {
+            var newCode = codeTextarea.val();
+            updateTestCode(testName, newCode, function() {
+                cleanup();
+                updateTestNamesFromPython();
+            });
+        });
+        
+        $('body').append(modal);
+        
+        // Focus textarea after a brief delay
+        setTimeout(function() {
+            codeTextarea.focus();
+        }, 100);
+    }
+
+    /**
+     * Update test code
+     */
+    function updateTestCode(testName, newCode, callback) {
+        if (!Jupyter.notebook.kernel) {
+            console.log('Kernel not available');
+            if (callback) callback();
+            return;
+        }
+        
+        var testNameJson = JSON.stringify(testName);
+        var testCodeJson = JSON.stringify(newCode);
+        var updateCode = Constants.PYTHON_TEMPLATES.UPDATE_TEST_CODE(testNameJson, testCodeJson);
+        
+        Jupyter.notebook.kernel.execute(
+            updateCode,
+            {
+                iopub: {
+                    output: function(msg) {
+                        if (msg.content && msg.content.name === 'stdout') {
+                            try {
+                                var result = JSON.parse(msg.content.text.trim());
+                                if (result.success) {
+                                    console.log('Test code updated successfully');
+                                    if (callback) callback();
+                                } else {
+                                    console.log('Error updating test code:', result.error);
+                                    if (callback) callback();
+                                }
+                            } catch(e) {
+                                console.log('Error parsing update result:', e);
+                                if (callback) callback();
+                            }
+                        }
+                    }
+                }
+            },
+            {silent: false, store_history: false}
+        );
+    }
+
+    /**
      * Show the test names overlay widget
      */
     function showTestNamesOverlay() {
@@ -329,7 +871,8 @@ define([
         init: function(constants) {
             Constants = constants;
             return {
-                showTestNamesOverlay: showTestNamesOverlay
+                showTestNamesOverlay: showTestNamesOverlay,
+                refreshIfOpen: refreshIfOpen
             };
         }
     };

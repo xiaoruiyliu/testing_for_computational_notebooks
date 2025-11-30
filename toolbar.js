@@ -50,17 +50,6 @@ define([
                 handlers.rerunTests || function() {}
             )
         );
-
-        buttons.push(
-            registerToolbarButton(
-                Constants.TOOLBAR_BUTTONS.HELLO_WORLD,
-                function handleHelloWorld() {
-                    // Insert a new code cell below current selection
-                    Jupyter.notebook.insert_cell_below('code').set_text("# Hello world");
-                    Jupyter.notebook.select_prev();
-                }
-            )
-        );
         
         // Add buttons group to toolbar
         Jupyter.toolbar.add_buttons_group(buttons);

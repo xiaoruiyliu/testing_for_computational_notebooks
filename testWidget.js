@@ -22,6 +22,9 @@ define([
         // Set the IPython widget code
         newCell.set_text(Constants.PYTHON_TEMPLATES.TEST_WIDGET);
         
+        // Hide the input area (code) but keep the output (widget) visible
+        newCell.element.find('.input').hide();
+
         // Select the newly created cell
         Jupyter.notebook.select(currentIndex + 1);
         

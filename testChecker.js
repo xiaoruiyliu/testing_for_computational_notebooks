@@ -13,21 +13,23 @@ define([
     var $ = window.$ || window.jQuery;
 
     /**
-     * Create a test result indicator element
-     */
-    function createTestIndicator(passed) {
+    * Create a test result indicator element
+    */
+    function createTestIndicator(passed, testName) {
         var styles = passed ? Constants.STYLES.TEST_PASSED : Constants.STYLES.TEST_FAILED;
-        var text = passed ? '✓ Passed!' : '✗ Failed!';
+        var text = passed ? '✓ Passed: ' + testName : '✗ Failed: ' + testName;
         var className = passed ? Constants.CLASSES.TEST_PASSED_INDICATOR : Constants.CLASSES.TEST_FAILED_INDICATOR;
-        
+    
         var indicator = $('<div>')
             .css(styles)
             .css('font-family', Constants.STYLES.FONT_FAMILY)
             .html(text);
-        
+    
         indicator.addClass(className);
         return indicator;
     }
+
+
 
     /**
      * Remove existing test indicators for a cell
@@ -53,10 +55,10 @@ define([
                             
                             // Display appropriate indicator (passed takes precedence)
                             if (testResults.passed) {
-                                var passedIndicator = createTestIndicator(true);
+                                var passedIndicator = createTestIndicator(true, testResults.test_name);
                                 cell.element.after(passedIndicator);
                             } else if (testResults.failed) {
-                                var failedIndicator = createTestIndicator(false);
+                                var failedIndicator = createTestIndicator(false, testResults.test_name);
                                 cell.element.after(failedIndicator);
                             }
                         } catch(e) {
