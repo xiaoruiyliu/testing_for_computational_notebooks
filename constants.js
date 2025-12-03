@@ -511,8 +511,23 @@ if 'tests' in globals():
                     'failed': True,
                     'test_name': test_name,
                     'test_code': test_logic,
-                    'is_dataframe_or_series': is_dataframe_or_series
+                    'is_dataframe_or_series': is_dataframe_or_series,
+                    'dataflow_analysis': None
                 }
+                
+                # If this is a DataFrame/Series test, try to analyze dataflow
+                if is_dataframe_or_series:
+                    try:
+                        # Import the analysis function (it's in a separate template)
+                        # We'll call it via kernel execution from JavaScript side
+                        # For now, just mark that analysis should be done
+                        test_result['needs_dataflow_analysis'] = True
+                        test_result['test_base_vars'] = list(test_base_vars)
+                        test_result['test_specific_paths'] = list(test_specific_paths)
+                    except Exception as analysis_error:
+                        debug_log("Error preparing dataflow analysis: " + str(analysis_error))
+                        test_result['needs_dataflow_analysis'] = False
+                
                 results.append(test_result)
             except Exception as e:
                 # Other errors also count as failure
@@ -521,8 +536,20 @@ if 'tests' in globals():
                     'failed': True,
                     'test_name': test_name,
                     'test_code': test_logic,
-                    'is_dataframe_or_series': is_dataframe_or_series
+                    'is_dataframe_or_series': is_dataframe_or_series,
+                    'dataflow_analysis': None
                 }
+                
+                # If this is a DataFrame/Series test, try to analyze dataflow
+                if is_dataframe_or_series:
+                    try:
+                        test_result['needs_dataflow_analysis'] = True
+                        test_result['test_base_vars'] = list(test_base_vars)
+                        test_result['test_specific_paths'] = list(test_specific_paths)
+                    except Exception as analysis_error:
+                        debug_log("Error preparing dataflow analysis: " + str(analysis_error))
+                        test_result['needs_dataflow_analysis'] = False
+                
                 results.append(test_result)
 else:
     debug_log("No 'tests' dictionary found in globals")
@@ -721,6 +748,423 @@ except Exception as e:
                 'enabled': enabled
             })
     print(json.dumps(test_data))
+    sys.stdout.flush()
+`;
+            },
+
+            ANALYZE_DATAFLOW: (testNameJson, testCodeJson, cellCodeJson, testBaseVarsJson, testSpecificPathsJson) => {
+                var escapedTestName = testNameJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                var escapedTestCode = testCodeJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+                var escapedCellCode = cellCodeJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+                var escapedTestBaseVars = testBaseVarsJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                var escapedTestSpecificPaths = testSpecificPathsJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                
+                return `
+import json
+import sys
+import ast
+import re
+import traceback
+from IPython import get_ipython
+
+def debug_log(msg):
+    print("DEBUG: " + str(msg), file=sys.stderr)
+
+try:
+    test_name = json.loads('${escapedTestName}')
+    test_code = json.loads('${escapedTestCode}')
+    cell_code = json.loads('${escapedCellCode}')
+    test_base_vars = json.loads('${escapedTestBaseVars}')
+    test_specific_paths = json.loads('${escapedTestSpecificPaths}')
+    
+    ns = get_ipython().user_ns
+    globals_dict = globals()
+    
+    # Merge namespace into globals for analysis
+    for key, value in ns.items():
+        if key not in globals_dict or globals_dict[key] is not value:
+            globals_dict[key] = value
+    
+    result = {
+        'success': False,
+        'dataflow': None,
+        'error': None
+    }
+    
+    try:
+        import pandas as pd
+        
+        # Find the dataframe/series variable from test
+        df_var = None
+        df_value = None
+        test_column = None
+        
+        # Extract column name from test if it's a specific path like df["column"]
+        for path in test_specific_paths:
+            if '["' in path and '"]' in path:
+                parts = path.split('["')
+                if len(parts) == 2:
+                    var_name = parts[0]
+                    col_name = parts[1].rstrip('"]')
+                    if var_name in globals_dict:
+                        var_val = globals_dict[var_name]
+                        if isinstance(var_val, pd.DataFrame) or isinstance(var_val, pd.Series):
+                            df_var = var_name
+                            df_value = var_val
+                            test_column = col_name
+                            break
+        
+        # If no specific path, check base variables
+        if df_var is None:
+            for var_name in test_base_vars:
+                if var_name in globals_dict:
+                    var_val = globals_dict[var_name]
+                    if isinstance(var_val, pd.DataFrame) or isinstance(var_val, pd.Series):
+                        df_var = var_name
+                        df_value = var_val
+                        break
+        
+        if df_var is None or df_value is None:
+            result['error'] = 'No DataFrame/Series variable found in test'
+            print(json.dumps(result))
+            sys.stdout.flush()
+            sys.exit(0)
+        
+        debug_log("Found DataFrame/Series: " + str(df_var) + ", column: " + str(test_column))
+        
+        # Try to identify failing rows by re-executing test logic partially
+        failing_indices = []
+        failing_values = []
+        
+        try:
+            # For DataFrame column tests, check which rows fail
+            if isinstance(df_value, pd.DataFrame) and test_column:
+                if test_column in df_value.columns:
+                    # Try to understand what the test is checking
+                    # Common patterns: .notna(), .all(), comparisons, etc.
+                    test_series = df_value[test_column]
+                    
+                    # Try to evaluate the test condition on the series
+                    # This is a simplified check - we'll use LLM for more complex analysis
+                    try:
+                        # Check for common patterns in test code
+                        if '.notna()' in test_code or '.isna()' in test_code:
+                            if '.notna()' in test_code:
+                                failing_mask = test_series.isna()
+                            else:
+                                failing_mask = test_series.notna()
+                            failing_indices = test_series[failing_mask].index.tolist()[:10]  # Limit to 10
+                            failing_values = test_series[failing_mask].tolist()[:10]
+                        elif '>' in test_code or '<' in test_code or '>=' in test_code or '<=' in test_code:
+                            # Try to extract comparison value
+                            # This is simplified - LLM will do better
+                            failing_indices = test_series.index.tolist()[:5]
+                            failing_values = test_series.tolist()[:5]
+                        else:
+                            # Generic: get some sample values
+                            failing_indices = test_series.index.tolist()[:5]
+                            failing_values = test_series.tolist()[:5]
+                    except Exception as e:
+                        debug_log("Error identifying failing rows: " + str(e))
+                        failing_indices = test_series.index.tolist()[:5]
+                        failing_values = test_series.tolist()[:5]
+        except Exception as e:
+            debug_log("Error processing DataFrame: " + str(e))
+        
+        # Now trace dependencies using AST analysis of cell_code
+        dependencies = []
+        dataflow_chain = []
+        
+        try:
+            # Parse cell code to find assignments
+            cell_tree = ast.parse(cell_code)
+            
+            # Find all assignments in the cell
+            assignments = {}
+            for node in ast.walk(cell_tree):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Subscript):
+                            # df["column"] = ...
+                            if isinstance(target.value, ast.Name):
+                                base_var = target.value.id
+                                if hasattr(ast, 'Constant') and isinstance(target.slice, ast.Constant):
+                                    col = target.slice.value
+                                elif hasattr(ast, 'Index') and isinstance(target.slice, ast.Index):
+                                    if isinstance(target.slice.value, ast.Str):
+                                        col = target.slice.value.s
+                                    elif isinstance(target.slice.value, ast.Constant):
+                                        col = target.slice.value.value
+                                    else:
+                                        col = None
+                                elif isinstance(target.slice, ast.Str):
+                                    col = target.slice.s
+                                else:
+                                    col = None
+                                
+                                if col and isinstance(col, str):
+                                    key = base_var + '["' + col + '"]'
+                                    # Get the right-hand side expression as string
+                                    try:
+                                        # Try ast.unparse (Python 3.9+)
+                                        if hasattr(ast, 'unparse'):
+                                            try:
+                                                rhs_code = ast.unparse(node.value)
+                                            except:
+                                                rhs_code = None
+                                        else:
+                                            rhs_code = None
+                                        
+                                        # Fallback: extract from source code if available
+                                        if rhs_code is None:
+                                            # Try to get source code directly
+                                            try:
+                                                import inspect
+                                                # This won't work for exec'd code, so use a simple representation
+                                                rhs_code = "expression"
+                                            except:
+                                                rhs_code = "expression"
+                                        
+                                        assignments[key] = {
+                                            'rhs': rhs_code,
+                                            'node': node
+                                        }
+                                    except Exception as assign_error:
+                                        debug_log("Error processing assignment: " + str(assign_error))
+                                        assignments[key] = {'rhs': 'expression', 'node': node}
+            
+            # Build dependency chain for test_column
+            if test_column and df_var:
+                current_path = df_var + '["' + test_column + '"]'
+                visited = set()
+                
+                def trace_dependency(path, depth=0):
+                    if depth > 10 or path in visited:  # Prevent infinite loops
+                        return []
+                    visited.add(path)
+                    
+                    if path in assignments:
+                        rhs = assignments[path]['rhs']
+                        # Extract variable references from RHS
+                        rhs_tree = ast.parse(rhs) if rhs != 'expression' else None
+                        deps = []
+                        if rhs_tree:
+                            for node in ast.walk(rhs_tree):
+                                if isinstance(node, ast.Subscript):
+                                    if isinstance(node.value, ast.Name):
+                                        base = node.value.id
+                                        if hasattr(ast, 'Constant') and isinstance(node.slice, ast.Constant):
+                                            col = node.slice.value
+                                        elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
+                                            if isinstance(node.slice.value, ast.Str):
+                                                col = node.slice.value.s
+                                            elif isinstance(node.slice.value, ast.Constant):
+                                                col = node.slice.value.value
+                                            else:
+                                                col = None
+                                        elif isinstance(node.slice, ast.Str):
+                                            col = node.slice.s
+                                        else:
+                                            col = None
+                                        
+                                        if col and isinstance(col, str):
+                                            dep_path = base + '["' + col + '"]'
+                                            deps.append(dep_path)
+                                            # Recursively trace
+                                            sub_deps = trace_dependency(dep_path, depth + 1)
+                                            deps.extend(sub_deps)
+                        
+                        return deps
+                    return []
+                
+                dependencies = trace_dependency(current_path)
+                # Reverse to get forward flow: source -> ... -> target
+                dependencies.reverse()
+                dependencies.append(current_path)
+                
+                # Get sample values for each step in the chain
+                for i, dep_path in enumerate(dependencies):
+                    parts = dep_path.split('["')
+                    if len(parts) == 2:
+                        var_name = parts[0]
+                        col_name = parts[1].rstrip('"]')
+                        if var_name in globals_dict:
+                            var_val = globals_dict[var_name]
+                            if isinstance(var_val, pd.DataFrame) and col_name in var_val.columns:
+                                # Get values at failing indices if available
+                                if failing_indices:
+                                    sample_values = var_val.loc[failing_indices[:3], col_name].tolist()
+                                else:
+                                    sample_values = var_val[col_name].head(3).tolist()
+                                
+                                dataflow_chain.append({
+                                    'path': dep_path,
+                                    'values': [str(v) for v in sample_values]
+                                })
+        except Exception as e:
+            debug_log("Error tracing dependencies: " + str(e))
+            debug_log(traceback.format_exc())
+        
+        # Prepare data for LLM analysis
+        llm_prompt_data = {
+            'test_code': test_code,
+            'cell_code': cell_code,
+            'dataflow_chain': dataflow_chain,
+            'failing_values': [str(v) for v in failing_values[:5]],
+            'test_column': test_column,
+            'df_var': df_var
+        }
+        
+        # Call LLM API (with fallback if API fails)
+        llm_result = None
+        try:
+            import urllib.request
+            import urllib.parse
+            
+            # Use OpenAI-compatible API (configurable)
+            # Default to a local endpoint or OpenAI
+            api_url = ns.get('TEST_LLM_API_URL', 'https://api.openai.com/v1/chat/completions')
+            api_key = ns.get('TEST_LLM_API_KEY', '')
+            
+            # Only try LLM if API key is provided or it's a local endpoint
+            # Otherwise, skip directly to fallback
+            if api_key or 'localhost' in api_url or '127.0.0.1' in api_url:
+                prompt = f"""Analyze this failing test and dataflow:
+
+Test code: {test_code}
+Cell code: {cell_code}
+Dataflow chain: {json.dumps(dataflow_chain)}
+Failing values: {failing_values[:5]}
+Test column: {test_column}
+
+Provide a concise analysis showing the data transformation chain that leads to the failure.
+Format as: source_value --> intermediate_value --> ... --> final_value --> False
+Show 3-5 example failing cases in this format."""
+
+                data = {
+                    'model': ns.get('TEST_LLM_MODEL', 'gpt-3.5-turbo'),
+                    'messages': [
+                        {'role': 'system', 'content': 'You are a data analysis assistant. Analyze dataflow and show failing cases concisely.'},
+                        {'role': 'user', 'content': prompt}
+                    ],
+                    'max_tokens': 500,
+                    'temperature': 0.3
+                }
+                
+                try:
+                    req = urllib.request.Request(
+                        api_url,
+                        data=json.dumps(data).encode('utf-8'),
+                        headers={
+                            'Content-Type': 'application/json',
+                            'Authorization': f'Bearer {api_key}' if api_key else ''
+                        }
+                    )
+                    
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        response_data = json.loads(response.read().decode('utf-8'))
+                        if 'choices' in response_data and len(response_data['choices']) > 0:
+                            llm_result = response_data['choices'][0]['message']['content']
+                            debug_log("LLM analysis successful")
+                except urllib.error.URLError as url_error:
+                    debug_log("LLM API URL error: " + str(url_error))
+                    llm_result = None
+                except urllib.error.HTTPError as http_error:
+                    debug_log("LLM API HTTP error: " + str(http_error))
+                    llm_result = None
+                except Exception as api_error:
+                    debug_log("LLM API call failed: " + str(api_error))
+                    llm_result = None
+            else:
+                debug_log("No LLM API key configured, skipping LLM analysis")
+        except ImportError:
+            debug_log("urllib not available for LLM calls")
+            llm_result = None
+        except Exception as e:
+            debug_log("Error calling LLM: " + str(e))
+            llm_result = None
+        
+        # Fallback: Generate dataflow display programmatically
+        if llm_result is None:
+            # Build dataflow string from chain in format: path1 --> path2 --> ... --> False
+            if dataflow_chain and len(dataflow_chain) > 0:
+                # Extract just the column names for cleaner display
+                path_names = []
+                for step in dataflow_chain:
+                    path = step.get('path', '')
+                    # Extract column name from path like df["column"]
+                    if '["' in path and '"]' in path:
+                        col_name = path.split('["')[1].rstrip('"]')
+                        path_names.append(col_name)
+                    else:
+                        path_names.append(path)
+                
+                if path_names:
+                    # Show example values for each step
+                    example_lines = []
+                    num_examples = min(3, len(failing_values) if failing_values else 1)
+                    
+                    for i in range(num_examples):
+                        example_parts = []
+                        for j, step in enumerate(dataflow_chain):
+                            if step.get('values') and len(step['values']) > i:
+                                val = step['values'][i]
+                                # Extract column name for display
+                                path = step.get('path', '')
+                                if '["' in path and '"]' in path:
+                                    col_name = path.split('["')[1].rstrip('"]')
+                                    example_parts.append(f"{col_name}: {val}")
+                                else:
+                                    example_parts.append(f"{path}: {val}")
+                        
+                        if example_parts:
+                            example_line = ' --> '.join(example_parts)
+                            if failing_values and i < len(failing_values):
+                                example_line += f' --> False (value: {failing_values[i]})'
+                            else:
+                                example_line += ' --> False'
+                            example_lines.append(example_line)
+                    
+                    if example_lines:
+                        llm_result = '\\n'.join(example_lines)
+                    else:
+                        # Fallback: just show the path chain
+                        llm_result = ' --> '.join(path_names) + ' --> False'
+                else:
+                    llm_result = 'Dataflow analysis unavailable'
+            else:
+                # If no chain but we have failing values, show them
+                if failing_values:
+                    llm_result = f'Failing values: {", ".join([str(v) for v in failing_values[:5]])}'
+                else:
+                    llm_result = 'Dataflow analysis unavailable'
+        
+        result['success'] = True
+        result['dataflow'] = {
+            'chain': dataflow_chain,
+            'failing_values': [str(v) for v in failing_values[:5]],
+            'analysis': llm_result,
+            'test_column': test_column,
+            'df_var': df_var
+        }
+        
+    except ImportError:
+        result['error'] = 'pandas not available'
+    except Exception as e:
+        result['error'] = str(e)
+        debug_log("Dataflow analysis error: " + str(e))
+        debug_log(traceback.format_exc())
+    
+    print(json.dumps(result))
+    sys.stdout.flush()
+    
+except Exception as e:
+    result = {
+        'success': False,
+        'dataflow': None,
+        'error': str(e)
+    }
+    print(json.dumps(result))
     sys.stdout.flush()
 `;
             }

@@ -13,10 +13,128 @@ define([
     var $ = window.$ || window.jQuery;
 
     /**
+    * Trigger dataflow analysis for a failing test
+    */
+    function triggerDataflowAnalysis(cell, testName, testCode, cellCode, testBaseVars, testSpecificPaths, dataflowContainer) {
+        if (!Jupyter.notebook.kernel) {
+            console.log('Kernel not available for dataflow analysis');
+            return;
+        }
+        
+        try {
+            // Generate Python code to analyze dataflow
+            var analysisCode = Constants.PYTHON_TEMPLATES.ANALYZE_DATAFLOW(
+                JSON.stringify(testName),
+                JSON.stringify(testCode),
+                JSON.stringify(cellCode),
+                JSON.stringify(testBaseVars),
+                JSON.stringify(testSpecificPaths)
+            );
+            
+            console.log('Triggering dataflow analysis for test:', testName);
+            
+            // Create callback to handle analysis results
+            var analysisCallbacks = {
+                iopub: {
+                    output: function(msg) {
+                        if (msg.content.name === 'stdout') {
+                            try {
+                                var outputText = msg.content.text.trim();
+                                if (!outputText) {
+                                    return;
+                                }
+                                
+                                var analysisResult = JSON.parse(outputText);
+                                console.log('Dataflow analysis result:', analysisResult);
+                                
+                                if (analysisResult.success && analysisResult.dataflow) {
+                                    displayDataflowAnalysis(dataflowContainer, analysisResult.dataflow);
+                                } else {
+                                    console.log('Dataflow analysis failed:', analysisResult.error);
+                                    // Don't show error to user - just silently fail
+                                }
+                            } catch(e) {
+                                console.log('Error parsing dataflow analysis result:', e);
+                                // Don't show error to user - just silently fail
+                            }
+                        }
+                    }
+                }
+            };
+            
+            // Execute the analysis code
+            Jupyter.notebook.kernel.execute(
+                analysisCode,
+                analysisCallbacks,
+                {silent: false, store_history: false}
+            );
+        } catch(e) {
+            console.log('Error triggering dataflow analysis:', e);
+            // Don't show error to user - test indicator already displayed
+        }
+    }
+
+    /**
+    * Display dataflow analysis results in the test indicator
+    */
+    function displayDataflowAnalysis(dataflowContainer, dataflowData) {
+        try {
+            if (!dataflowData || !dataflowData.analysis) {
+                return;
+            }
+            
+            var separator = $('<div>')
+                .text('-------------------------')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '8px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            var exampleHeader = $('<div>')
+                .text('Dataflow analysis:')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('font-weight', '500');
+            
+            dataflowContainer.append(separator);
+            dataflowContainer.append(exampleHeader);
+            
+            // Parse and display the analysis
+            var analysisText = dataflowData.analysis;
+            
+            // Split by lines if it's multi-line
+            var lines = analysisText.split('\n').filter(function(line) {
+                return line.trim().length > 0;
+            });
+            
+            // Display each line
+            for (var i = 0; i < Math.min(lines.length, 10); i++) {
+                var line = lines[i].trim();
+                if (line.length > 0) {
+                    var exampleLine = $('<div>')
+                        .text(line)
+                        .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                        .css('font-size', '12px')
+                        .css('margin-top', '4px')
+                        .css('color', 'rgba(0,0,0,0.7)')
+                        .css('white-space', 'pre-wrap')
+                        .css('word-wrap', 'break-word');
+                    dataflowContainer.append(exampleLine);
+                }
+            }
+            
+            dataflowContainer.css('display', 'block');
+        } catch (e) {
+            console.log('Error displaying dataflow analysis:', e);
+        }
+    }
+
+    /**
     * Create a test result indicator element with close button
     * Styled to match Jupyter cell outputs exactly
     */
-    function createTestIndicator(passed, testName, cellId, testCode, isDataframeOrSeries) {
+    function createTestIndicator(passed, testName, cellId, testCode, isDataframeOrSeries, dataflowAnalysis) {
         var styles = passed ? Constants.STYLES.TEST_PASSED : Constants.STYLES.TEST_FAILED;
         var className = passed ? Constants.CLASSES.TEST_PASSED_INDICATOR : Constants.CLASSES.TEST_FAILED_INDICATOR;
         
@@ -117,77 +235,12 @@ define([
         
         // Note: isDataframeOrSeries is still tracked internally but not displayed to users
         
-        // Add hardcoded example failing cases for "min_salaries" test
-        if (!passed && testName === 'min_salaries') {
-            var separator = $('<div>')
-                .text('-------------------------')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '8px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            var exampleHeader = $('<div>')
-                .text('Example failing cases:')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('font-weight', '500');
-            
-            var exampleCase1 = $('<div>')
-                .text('$85,000 ---> NaN')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            var exampleCase2 = $('<div>')
-                .text('$95,000 ---> NaN')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            textContainer.append(separator);
-            textContainer.append(exampleHeader);
-            textContainer.append(exampleCase1);
-            textContainer.append(exampleCase2);
-        }
-        
-        // Add hardcoded example failing cases for "max_salaries" test
-        if (!passed && testName === 'max_salaries') {
-            var separator = $('<div>')
-                .text('-------------------------')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '8px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            var exampleHeader = $('<div>')
-                .text('Example failing cases:')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('font-weight', '500');
-            
-            var exampleCase1 = $('<div>')
-                .text('$85,000 --> NaN')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            var exampleCase2 = $('<div>')
-                .text('7500 --> 15600000.0')
-                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
-                .css('font-size', '12px')
-                .css('margin-top', '4px')
-                .css('color', 'rgba(0,0,0,0.7)');
-            
-            textContainer.append(separator);
-            textContainer.append(exampleHeader);
-            textContainer.append(exampleCase1);
-            textContainer.append(exampleCase2);
-        }
+        // Add dataflow analysis display for failing DataFrame/Series tests
+        // This will be populated asynchronously if dataflow analysis is available
+        var dataflowContainer = $('<div>')
+            .css('margin-top', '8px')
+            .css('display', 'none'); // Hidden by default, shown when dataflow is available
+        textContainer.append(dataflowContainer);
     
         // Create close button (positioned at top right)
         var closeButton = $('<button>')
@@ -237,7 +290,20 @@ define([
         output.append(indicator);
         outputWrapper.append(output);
         
-        // Return the output element (not the wrapper) so it can be appended to the cell's output_wrapper
+        // Display dataflow analysis if available
+        if (dataflowAnalysis && dataflowAnalysis.success && dataflowAnalysis.dataflow) {
+            try {
+                displayDataflowAnalysis(dataflowContainer, dataflowAnalysis.dataflow);
+            } catch(e) {
+                console.log('Error displaying initial dataflow analysis:', e);
+                // Continue - test indicator still shows
+            }
+        }
+        
+        // Store dataflow container reference on the output element for later updates
+        output.data('dataflow-container', dataflowContainer);
+        
+        // Return the output element (backward compatible)
         // This matches Jupyter's structure: .output_wrapper > .output > .output_subarea
         return output;
     }
@@ -346,13 +412,56 @@ define([
                                 
                                 // Display appropriate indicator for each test
                                 if (testResults.passed) {
-                                    var passedIndicator = createTestIndicator(true, testResults.test_name || 'Unknown', cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
-                                    cellOutputArea.append(passedIndicator);
-                                    console.log('Displayed passed indicator for:', testResults.test_name);
+                                    try {
+                                        var indicatorOutput = createTestIndicator(
+                                            true, 
+                                            testResults.test_name || 'Unknown', 
+                                            cellId, 
+                                            testResults.test_code || null, 
+                                            testResults.is_dataframe_or_series || false,
+                                            null // No dataflow analysis for passed tests
+                                        );
+                                        cellOutputArea.append(indicatorOutput);
+                                        console.log('Displayed passed indicator for:', testResults.test_name);
+                                    } catch(e) {
+                                        console.log('Error creating passed indicator:', e);
+                                        // Continue processing other tests
+                                    }
                                 } else if (testResults.failed) {
-                                    var failedIndicator = createTestIndicator(false, testResults.test_name || 'Unknown', cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
-                                    cellOutputArea.append(failedIndicator);
-                                    console.log('Displayed failed indicator for:', testResults.test_name);
+                                    try {
+                                        // Create indicator first (will show even if analysis fails)
+                                        var indicatorOutput = createTestIndicator(
+                                            false, 
+                                            testResults.test_name || 'Unknown', 
+                                            cellId, 
+                                            testResults.test_code || null, 
+                                            testResults.is_dataframe_or_series || false,
+                                            testResults.dataflow_analysis || null
+                                        );
+                                        
+                                        cellOutputArea.append(indicatorOutput);
+                                        console.log('Displayed failed indicator for:', testResults.test_name);
+                                        
+                                        // If this test needs dataflow analysis and we haven't done it yet, trigger it
+                                        if (testResults.needs_dataflow_analysis && !testResults.dataflow_analysis) {
+                                            // Get dataflow container from the output element
+                                            var dataflowContainer = indicatorOutput.data('dataflow-container');
+                                            if (dataflowContainer && dataflowContainer.length > 0) {
+                                                triggerDataflowAnalysis(
+                                                    cell,
+                                                    testResults.test_name,
+                                                    testResults.test_code,
+                                                    cell.get_text(),
+                                                    testResults.test_base_vars || [],
+                                                    testResults.test_specific_paths || [],
+                                                    dataflowContainer
+                                                );
+                                            }
+                                        }
+                                    } catch(e) {
+                                        console.log('Error creating failed indicator:', e);
+                                        // Continue processing other tests - at least show basic failure
+                                    }
                                 }
                             }
                         } catch(e) {
