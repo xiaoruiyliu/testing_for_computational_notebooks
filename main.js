@@ -32,8 +32,13 @@ define([
             rerunTests: null  // To be implemented
         });
         
-        // Listen for cell execution completion
-        events.on('execute.CodeCell', TestChecker.checkForTestCompletion);
+        // Listen for cell execution completion (after cell finishes executing)
+        events.on('finished_execute.CodeCell', function(evt, data) {
+            // Add a small delay to ensure Python execution has fully completed
+            setTimeout(function() {
+                TestChecker.checkForTestCompletion(evt, data);
+            }, 100);
+        });
         
         // Listen for cell execution completion and refresh test names widget if open
         // This ensures the widget automatically updates when the tests dictionary changes

@@ -46,7 +46,10 @@ define([
             .addClass('output')
             .css({
                 'margin': '0px',
+                'margin-top': '8px', // Add space between code cell and indicator
+                'margin-left': '57px', // Extend to left edge for wider box
                 'padding': '0px',
+                'padding-left': '57px', // Match cell's left padding
                 'width': '100%', // Span full width
                 'box-sizing': 'border-box'
             });
@@ -112,15 +115,78 @@ define([
             textContainer.append(testBodyCode);
         }
         
-        // Add DataFrame/Series detection message if applicable
-        if (isDataframeOrSeries) {
-            var dfSeriesLine = $('<div>')
-                .text('This test tests a dataframe or series.')
+        // Note: isDataframeOrSeries is still tracked internally but not displayed to users
+        
+        // Add hardcoded example failing cases for "min_salaries" test
+        if (!passed && testName === 'min_salaries') {
+            var separator = $('<div>')
+                .text('-------------------------')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
                 .css('font-size', '12px')
-                .css('font-style', 'italic')
-                .css('color', 'rgba(0,0,0,0.7)')
-                .css('margin-top', '4px');
-            textContainer.append(dfSeriesLine);
+                .css('margin-top', '8px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            var exampleHeader = $('<div>')
+                .text('Example failing cases:')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('font-weight', '500');
+            
+            var exampleCase1 = $('<div>')
+                .text('$85,000 ---> NaN')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            var exampleCase2 = $('<div>')
+                .text('$95,000 ---> NaN')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            textContainer.append(separator);
+            textContainer.append(exampleHeader);
+            textContainer.append(exampleCase1);
+            textContainer.append(exampleCase2);
+        }
+        
+        // Add hardcoded example failing cases for "max_salaries" test
+        if (!passed && testName === 'max_salaries') {
+            var separator = $('<div>')
+                .text('-------------------------')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '8px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            var exampleHeader = $('<div>')
+                .text('Example failing cases:')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('font-weight', '500');
+            
+            var exampleCase1 = $('<div>')
+                .text('$85,000 --> NaN')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            var exampleCase2 = $('<div>')
+                .text('7500 --> 15600000.0')
+                .css('font-family', 'Monaco, Menlo, "Courier New", monospace')
+                .css('font-size', '12px')
+                .css('margin-top', '4px')
+                .css('color', 'rgba(0,0,0,0.7)');
+            
+            textContainer.append(separator);
+            textContainer.append(exampleHeader);
+            textContainer.append(exampleCase1);
+            textContainer.append(exampleCase2);
         }
     
         // Create close button (positioned at top right)
@@ -159,8 +225,8 @@ define([
             .click(function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                // Remove the entire output_wrapper
-                outputWrapper.remove();
+                // Remove the entire output element (which contains this indicator)
+                output.remove();
                 return false;
             });
     
@@ -171,7 +237,9 @@ define([
         output.append(indicator);
         outputWrapper.append(output);
         
-        return outputWrapper;
+        // Return the output element (not the wrapper) so it can be appended to the cell's output_wrapper
+        // This matches Jupyter's structure: .output_wrapper > .output > .output_subarea
+        return output;
     }
 
 
@@ -215,11 +283,26 @@ define([
                 output: function(msg) {
                     if (msg.content.name === 'stdout') {
                         try {
-                            var testResultsArray = JSON.parse(msg.content.text.trim());
+                            var outputText = msg.content.text.trim();
+                            if (!outputText) {
+                                console.log('Empty stdout output');
+                                return;
+                            }
+                            
+                            console.log('Received test results:', outputText);
+                            var testResultsArray = JSON.parse(outputText);
                             
                             // Ensure testResultsArray is an array
                             if (!Array.isArray(testResultsArray)) {
                                 testResultsArray = [testResultsArray];
+                            }
+                            
+                            console.log('Parsed test results array:', testResultsArray);
+                            
+                            // Skip if no results
+                            if (testResultsArray.length === 0) {
+                                console.log('No test results to display');
+                                return;
                             }
                             
                             // Get cell ID for tracking
@@ -234,37 +317,50 @@ define([
                                 cell.element.append(cellOutputArea);
                             }
                             
-                            // Process all test results
+                            // First, remove all existing test indicators for this cell to avoid duplicates
+                            // Find all .output elements that contain test indicators for this cell
+                            cellOutputArea.find('.output_subarea[data-cell-id="' + cellId + '"]').each(function() {
+                                // Find the parent .output element that contains this indicator
+                                var outputElement = $(this).closest('.output');
+                                if (outputElement.length > 0) {
+                                    outputElement.remove();
+                                }
+                            });
+                            
+                            // Re-get the output area after removal
+                            cellOutputArea = cell.element.find('.output_wrapper').first();
+                            if (cellOutputArea.length === 0) {
+                                cellOutputArea = $('<div>').addClass('output_wrapper');
+                                cell.element.append(cellOutputArea);
+                            }
+                            
+                            // Process all test results and display each one
                             for (var i = 0; i < testResultsArray.length; i++) {
                                 var testResults = testResultsArray[i];
                                 
-                                // Remove existing test indicators for this specific test and cell
-                                // Only remove if it's the same test name (allow multiple different tests)
-                                var existingIndicator = cellOutputArea.find('.output_subarea[data-cell-id="' + cellId + '"][data-test-name="' + testResults.test_name + '"]').first();
-                                if (existingIndicator.length > 0) {
-                                    // Remove the entire output_wrapper containing this indicator
-                                    existingIndicator.closest('.output_wrapper').remove();
-                                }
-                                
-                                // Re-get the output area after potential removal
-                                cellOutputArea = cell.element.find('.output_wrapper').first();
-                                if (cellOutputArea.length === 0) {
-                                    cellOutputArea = $('<div>').addClass('output_wrapper');
-                                    cell.element.append(cellOutputArea);
+                                // Skip if testResults is invalid
+                                if (!testResults || (!testResults.passed && !testResults.failed)) {
+                                    console.log('Skipping invalid test result:', testResults);
+                                    continue;
                                 }
                                 
                                 // Display appropriate indicator for each test
                                 if (testResults.passed) {
-                                    var passedIndicator = createTestIndicator(true, testResults.test_name, cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
+                                    var passedIndicator = createTestIndicator(true, testResults.test_name || 'Unknown', cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
                                     cellOutputArea.append(passedIndicator);
+                                    console.log('Displayed passed indicator for:', testResults.test_name);
                                 } else if (testResults.failed) {
-                                    var failedIndicator = createTestIndicator(false, testResults.test_name, cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
+                                    var failedIndicator = createTestIndicator(false, testResults.test_name || 'Unknown', cellId, testResults.test_code || null, testResults.is_dataframe_or_series || false);
                                     cellOutputArea.append(failedIndicator);
+                                    console.log('Displayed failed indicator for:', testResults.test_name);
                                 }
                             }
                         } catch(e) {
                             console.log('Error parsing test results:', e);
+                            console.log('Raw output:', msg.content.text);
                         }
+                    } else if (msg.content.name === 'stderr') {
+                        console.log('Stderr output:', msg.content.text);
                     }
                 }
             }
@@ -275,11 +371,30 @@ define([
      * Check for test completion in an executed cell
      */
     function checkForTestCompletion(evt, data) {
+        console.log('checkForTestCompletion called');
         var cell = data.cell;
+        if (!cell) {
+            console.log('No cell in data');
+            return;
+        }
         var cellCode = cell.get_text();
+        if (!cellCode) {
+            console.log('No cell code');
+            return;
+        }
+        
+        console.log('Checking test completion for cell with code:', cellCode.substring(0, 100));
+        
+        // Check if kernel is available
+        if (!Jupyter.notebook.kernel) {
+            console.log('Kernel not available');
+            return;
+        }
         
         // Generate Python code to check test results
         var checkCode = Constants.PYTHON_TEMPLATES.CHECK_TEST_COMPLETION(cellCode);
+        
+        console.log('Executing check code (first 200 chars):', checkCode.substring(0, 200));
         
         // Create callbacks
         var callbacks = handleTestCheckCallback(cell);

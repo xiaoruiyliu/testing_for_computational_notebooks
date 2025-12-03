@@ -639,7 +639,7 @@ define([
                 'color': '#333',
                 'font-family': Constants.STYLES.FONT_FAMILY
             })
-            .text('Edit Test: ' + testName);
+            .text('Edit Test');
         
         var closeBtn = $('<button>')
             .html('&times;')
@@ -660,7 +660,53 @@ define([
         header.append(title);
         header.append(closeBtn);
         
+        // Test name input field
+        var nameLabel = $('<label>')
+            .text('Test Name:')
+            .css({
+                'display': 'block',
+                'margin-bottom': '6px',
+                'font-size': '13px',
+                'font-weight': '500',
+                'color': '#333',
+                'font-family': Constants.STYLES.FONT_FAMILY
+            });
+        
+        var nameInput = $('<input>')
+            .attr('type', 'text')
+            .val(testName || '')
+            .css({
+                'width': '100%',
+                'height': '32px',
+                'font-family': 'Monaco, Menlo, "Courier New", monospace',
+                'font-size': '13px',
+                'padding': '6px 10px',
+                'border': '1px solid #ddd',
+                'border-radius': '2px',
+                'margin-bottom': '12px',
+                'box-sizing': 'border-box'
+            })
+            .attr('placeholder', 'Test name (e.g., test_addition)');
+        
+        // Prevent notebook keyboard manager from handling events in name input
+        nameInput.on('keydown keyup keypress', function(e) {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return true;
+        });
+        
         // Textarea for code (standardized with instantiation widget)
+        var codeLabel = $('<label>')
+            .text('Test Code:')
+            .css({
+                'display': 'block',
+                'margin-bottom': '6px',
+                'font-size': '13px',
+                'font-weight': '500',
+                'color': '#333',
+                'font-family': Constants.STYLES.FONT_FAMILY
+            });
+        
         var codeTextarea = $('<textarea>')
             .val(currentCode || '')
             .css({
@@ -773,6 +819,9 @@ define([
         buttons.append(saveBtn);
         
         modalContent.append(header);
+        modalContent.append(nameLabel);
+        modalContent.append(nameInput);
+        modalContent.append(codeLabel);
         modalContent.append(codeTextarea);
         modalContent.append(buttons);
         modal.append(modalContent);
@@ -787,8 +836,20 @@ define([
         closeBtn.off('click').click(cleanup);
         cancelBtn.click(cleanup);
         saveBtn.click(function() {
+            var newName = nameInput.val().trim();
             var newCode = codeTextarea.val();
-            updateTestCode(testName, newCode, function() {
+            
+            if (!newName) {
+                alert('Please enter a test name');
+                return;
+            }
+            
+            if (!newCode) {
+                alert('Please enter test code');
+                return;
+            }
+            
+            updateTestCode(testName, newName, newCode, function() {
                 cleanup();
                 updateTestNamesFromPython();
             });
@@ -796,25 +857,27 @@ define([
         
         $('body').append(modal);
         
-        // Focus textarea after a brief delay
+        // Focus name input after a brief delay, then allow tab to code textarea
         setTimeout(function() {
-            codeTextarea.focus();
+            nameInput.focus();
+            nameInput.select(); // Select existing text for easy editing
         }, 100);
     }
 
     /**
-     * Update test code
+     * Update test code and optionally rename test
      */
-    function updateTestCode(testName, newCode, callback) {
+    function updateTestCode(oldTestName, newTestName, newCode, callback) {
         if (!Jupyter.notebook.kernel) {
             console.log('Kernel not available');
             if (callback) callback();
             return;
         }
         
-        var testNameJson = JSON.stringify(testName);
+        var oldTestNameJson = JSON.stringify(oldTestName);
+        var newTestNameJson = JSON.stringify(newTestName);
         var testCodeJson = JSON.stringify(newCode);
-        var updateCode = Constants.PYTHON_TEMPLATES.UPDATE_TEST_CODE(testNameJson, testCodeJson);
+        var updateCode = Constants.PYTHON_TEMPLATES.UPDATE_TEST_CODE(oldTestNameJson, newTestNameJson, testCodeJson);
         
         Jupyter.notebook.kernel.execute(
             updateCode,

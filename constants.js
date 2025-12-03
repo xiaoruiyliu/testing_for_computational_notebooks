@@ -157,7 +157,11 @@ test_name_input = widgets.Text(
         width='100%',
         height='32px'
     ),
-    style={'description_width': '0px'}
+    style={
+        'description_width': '0px',
+        'font_family': 'Monaco, Menlo, "Courier New", monospace',
+        'font_size': '13px'
+    }
 )
 
 # Test logic input (large, code editor style)
@@ -166,11 +170,13 @@ test_logic_input = widgets.Textarea(
     description='',
     layout=widgets.Layout(
         width='100%',
-        height='120px',
-        font_family='Monaco, Menlo, "Courier New", monospace',
-        font_size='13px'
+        height='120px'
     ),
-    style={'description_width': '0px'}
+    style={
+        'description_width': '0px',
+        'font_family': 'Monaco, Menlo, "Courier New", monospace',
+        'font_size': '13px'
+    }
 )
 
 instantiate_button = widgets.Button(
@@ -238,6 +244,24 @@ accordion = widgets.Accordion(children=[
 accordion.set_title(0, 'Test Instantiation Widget')
 accordion.selected_index = 0
 
+# Inject custom CSS to style the text inputs with monospace font
+from IPython.display import HTML, display as ipython_display
+css_style = """
+<style>
+.jupyter-widgets.widget-text input[type="text"],
+.jupyter-widgets input[type="text"].widget-text-input {
+    font-family: Monaco, Menlo, "Courier New", monospace !important;
+    font-size: 13px !important;
+}
+.jupyter-widgets.widget-textarea textarea,
+.jupyter-widgets textarea.widget-textarea-text {
+    font-family: Monaco, Menlo, "Courier New", monospace !important;
+    font-size: 13px !important;
+}
+</style>
+"""
+ipython_display(HTML(css_style))
+
 display(accordion)`,
 
             CHECK_TEST_COMPLETION: (cellCode) => `
@@ -251,7 +275,6 @@ cell_code = """${cellCode.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"""
 
 # Debug output helper
 def debug_log(msg):
-    result['debug'].append(str(msg))
     import sys
     print("DEBUG: " + str(msg), file=sys.stderr)
 
@@ -505,6 +528,7 @@ else:
     debug_log("No 'tests' dictionary found in globals")
 
 print(json.dumps(results))
+sys.stdout.flush()
 `,
 
             FETCH_TEST_NAMES: `
@@ -573,9 +597,10 @@ except Exception as e:
 `;
             },
 
-            UPDATE_TEST_CODE: (testNameJson, testCodeJson) => {
+            UPDATE_TEST_CODE: (oldTestNameJson, newTestNameJson, testCodeJson) => {
                 // Escape for embedding in Python string
-                var escapedName = testNameJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                var escapedOldName = oldTestNameJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                var escapedNewName = newTestNameJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 var escapedCode = testCodeJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
                 return `
 import json
@@ -585,14 +610,34 @@ from IPython import get_ipython
 ns = get_ipython().user_ns
 
 try:
-    test_name = json.loads('${escapedName}')
+    old_test_name = json.loads('${escapedOldName}')
+    new_test_name = json.loads('${escapedNewName}')
     test_code = json.loads('${escapedCode}')
     
-    if 'tests' in ns:
-        ns['tests'][test_name] = test_code
-        print(json.dumps({'success': True}))
-    else:
+    if 'tests' not in ns:
         print(json.dumps({'error': 'tests dictionary not found'}))
+        sys.stdout.flush()
+    else:
+        # Initialize test_enabled if it doesn't exist
+        if 'test_enabled' not in ns:
+            ns['test_enabled'] = {}
+        
+        # Get the enabled status of the old test (default to True if not set)
+        enabled_status = ns['test_enabled'].get(old_test_name, True)
+        
+        # If renaming (old name != new name)
+        if old_test_name != new_test_name:
+            # Delete the old test if it exists
+            if old_test_name in ns['tests']:
+                del ns['tests'][old_test_name]
+            if old_test_name in ns['test_enabled']:
+                del ns['test_enabled'][old_test_name]
+        
+        # Create/update the test with new name and code
+        ns['tests'][new_test_name] = test_code
+        ns['test_enabled'][new_test_name] = enabled_status
+        
+        print(json.dumps({'success': True, 'renamed': old_test_name != new_test_name}))
     sys.stdout.flush()
 except Exception as e:
     print(json.dumps({'error': str(e)}))
