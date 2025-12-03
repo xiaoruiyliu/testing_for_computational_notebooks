@@ -10,8 +10,9 @@ define([
     './testWidget',
     './testChecker',
     './testNamesWidget',
+    './dataframeViewer',
     './toolbar'
-], function(Jupyter, events, ConstantsModule, TestWidgetModule, TestCheckerModule, TestNamesWidgetModule, ToolbarModule) {
+], function(Jupyter, events, ConstantsModule, TestWidgetModule, TestCheckerModule, TestNamesWidgetModule, DataFrameViewerModule, ToolbarModule) {
     'use strict';
 
     // Initialize all modules with constants
@@ -19,6 +20,7 @@ define([
     var TestWidget = TestWidgetModule.init(Constants);
     var TestChecker = TestCheckerModule.init(Constants);
     var TestNamesWidget = TestNamesWidgetModule.init(Constants);
+    var DataFrameViewer = DataFrameViewerModule.init(Constants);
     var Toolbar = ToolbarModule.init(Constants);
 
     /**
@@ -29,7 +31,7 @@ define([
         Toolbar.initializeToolbar({
             insertInteractiveTestWidget: TestWidget.insertInteractiveTestWidget,
             showTestNamesOverlay: TestNamesWidget.showTestNamesOverlay,
-            rerunTests: null  // To be implemented
+            insertDataframeViewerWidget: DataFrameViewer.insertDataframeViewerWidget
         });
         
         // Listen for cell execution completion (after cell finishes executing)

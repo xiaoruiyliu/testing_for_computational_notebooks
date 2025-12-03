@@ -43,11 +43,11 @@ define([
             )
         );
         
-        // Add Rerun Tests button
+        // Add View DataFrame button
         buttons.push(
             registerToolbarButton(
-                Constants.TOOLBAR_BUTTONS.RERUN_TESTS,
-                handlers.rerunTests || function() {}
+                Constants.TOOLBAR_BUTTONS.VIEW_DATAFRAME,
+                handlers.insertDataframeViewerWidget || function() {}
             )
         );
         

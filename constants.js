@@ -20,11 +20,11 @@ define(function() {
                 actionName: 'view-test-names',
                 label: 'View Tests'
             },
-            RERUN_TESTS: {
-                help: 'Rerun all test cells',
-                icon: 'fa-refresh',
-                actionName: 'rerun-tests',
-                label: 'Rerun Tests'
+            VIEW_DATAFRAME: {
+                help: 'View a dataframe from notebook global state',
+                icon: 'fa-table',
+                actionName: 'view-dataframe',
+                label: 'View DataFrame'
             }
         },
 
@@ -263,6 +263,185 @@ css_style = """
 ipython_display(HTML(css_style))
 
 display(accordion)`,
+
+            DATAFRAME_VIEWER_WIDGET: `from ipywidgets import widgets
+from IPython.display import display, HTML, clear_output
+import json
+import sys
+from IPython import get_ipython
+
+ns = get_ipython().user_ns
+
+# Function to fetch available dataframes
+def fetch_dataframes():
+    dataframes = []
+    try:
+        import pandas as pd
+        for var_name, var_value in ns.items():
+            if var_name.startswith('_'):
+                continue
+            if isinstance(var_value, pd.DataFrame):
+                shape = var_value.shape
+                dataframes.append({
+                    'name': var_name,
+                    'shape': shape,
+                    'rows': shape[0],
+                    'cols': shape[1]
+                })
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    return dataframes
+
+# Initialize dataframe list
+dataframes_list = fetch_dataframes()
+
+# Create dropdown for dataframe selection
+if dataframes_list:
+    dataframe_options = [(f"{df['name']} ({df['rows']} rows × {df['cols']} cols)", df['name']) for df in dataframes_list]
+else:
+    dataframe_options = [('No dataframes found', '')]
+
+dataframe_dropdown = widgets.Dropdown(
+    options=dataframe_options,
+    description='DataFrame:',
+    disabled=False,
+    layout=widgets.Layout(width='100%', height='32px'),
+    style={'description_width': '150px'}
+)
+
+# Proceed button
+proceed_button = widgets.Button(
+    description='Proceed',
+    button_style='primary',
+    tooltip='Display selected dataframe',
+    icon='check',
+    layout=widgets.Layout(width='120px', height='32px')
+)
+
+# Output area for displaying the dataframe
+output_area = widgets.Output()
+
+def on_proceed_click(b):
+    with output_area:
+        output_area.clear_output()
+        selected_name = dataframe_dropdown.value
+        
+        if selected_name and selected_name in ns:
+            try:
+                import pandas as pd
+                df = ns[selected_name]
+                
+                if isinstance(df, pd.DataFrame):
+                    # Display the dataframe as HTML table
+                    df_display = df.head(100)
+                    html_table = df_display.to_html(classes='dataframe', table_id='dataframe-view', escape=False)
+                    
+                    # Add styling
+                    styled_html = f"""
+<style>
+.dataframe {{
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.9em;
+    font-family: sans-serif;
+    min-width: 400px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+    width: 100%;
+    overflow-x: auto;
+    display: block;
+}}
+.dataframe thead tr {{
+    background-color: #009879;
+    color: #ffffff;
+    text-align: left;
+}}
+.dataframe th,
+.dataframe td {{
+    padding: 12px 15px;
+    border: 1px solid #dddddd;
+}}
+.dataframe tbody tr {{
+    border-bottom: 1px solid #dddddd;
+}}
+.dataframe tbody tr:nth-of-type(even) {{
+    background-color: #f3f3f3;
+}}
+.dataframe tbody tr:last-of-type {{
+    border-bottom: 2px solid #009879;
+}}
+</style>
+<div style="margin: 10px 0;">
+    <h3 style="font-family: sans-serif; color: #333; margin-bottom: 10px;">
+        DataFrame: <code style="background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px;">{selected_name}</code>
+    </h3>
+    <p style="font-family: sans-serif; color: #666; font-size: 0.9em; margin-bottom: 15px;">
+        Shape: {df.shape[0]} rows × {df.shape[1]} columns
+        {"(showing first 100 rows)" if len(df) > 100 else ""}
+    </p>
+    {html_table}
+</div>
+"""
+                    display(HTML(styled_html))
+                else:
+                    error_html = """
+<div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 11px !important; color: #d32f2f; margin-top: 8px;">
+    <span>⚠ Selected variable is not a DataFrame</span>
+</div>
+"""
+                    display(HTML(error_html))
+            except ImportError:
+                error_html = """
+<div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 11px !important; color: #d32f2f; margin-top: 8px;">
+    <span>⚠ pandas is not available</span>
+</div>
+"""
+                display(HTML(error_html))
+            except Exception as e:
+                error_html = f"""
+<div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 11px !important; color: #d32f2f; margin-top: 8px;">
+    <span>⚠ Error displaying dataframe: {str(e)}</span>
+</div>
+"""
+                display(HTML(error_html))
+        else:
+            error_html = """
+<div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 11px !important; color: #d32f2f; margin-top: 8px;">
+    <span>⚠ Please select a valid dataframe</span>
+</div>
+"""
+            display(HTML(error_html))
+
+proceed_button.on_click(on_proceed_click)
+
+# Layout
+if dataframes_list:
+    widget_container = widgets.VBox([
+        widgets.HBox([
+            dataframe_dropdown,
+            proceed_button
+        ], layout=widgets.Layout(
+            justify_content='space-between',
+            align_items='center',
+            margin='8px 0'
+        )),
+        output_area
+    ], layout=widgets.Layout(padding='10px'))
+    
+    accordion = widgets.Accordion(children=[widget_container])
+    accordion.set_title(0, 'DataFrame Viewer')
+    accordion.selected_index = 0
+    
+    display(accordion)
+else:
+    no_dataframes_html = """
+<div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 13px !important; color: #666; padding: 20px; text-align: center;">
+    <p>No DataFrames found in the notebook's global state.</p>
+    <p style="font-size: 11px; color: #999; margin-top: 10px;">Create a pandas DataFrame to view it here.</p>
+</div>
+"""
+    display(HTML(no_dataframes_html))`,
 
             CHECK_TEST_COMPLETION: (cellCode) => `
 import json
@@ -1165,6 +1344,135 @@ except Exception as e:
         'error': str(e)
     }
     print(json.dumps(result))
+    sys.stdout.flush()
+`;
+            },
+
+            LIST_DATAFRAMES: `
+import json
+import sys
+from IPython import get_ipython
+
+ns = get_ipython().user_ns
+
+try:
+    dataframes = []
+    
+    # Try to import pandas
+    try:
+        import pandas as pd
+        
+        # Iterate through all variables in the namespace
+        for var_name, var_value in ns.items():
+            # Skip private/internal variables
+            if var_name.startswith('_'):
+                continue
+            
+            # Check if it's a DataFrame
+            if isinstance(var_value, pd.DataFrame):
+                # Get basic info about the dataframe
+                shape = var_value.shape
+                columns = list(var_value.columns)
+                dataframes.append({
+                    'name': var_name,
+                    'shape': shape,
+                    'rows': shape[0],
+                    'cols': shape[1],
+                    'columns': columns[:10]  # First 10 columns
+                })
+    except ImportError:
+        # pandas not available
+        pass
+    except Exception as e:
+        # Error checking dataframes
+        pass
+    
+    print(json.dumps(dataframes))
+    sys.stdout.flush()
+except Exception as e:
+    print(json.dumps([]))
+    sys.stdout.flush()
+`,
+
+            DISPLAY_DATAFRAME: (dataframeNameJson) => {
+                var escapedName = dataframeNameJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                return `
+import json
+import sys
+from IPython import get_ipython
+from IPython.display import display, HTML
+
+ns = get_ipython().user_ns
+
+try:
+    dataframe_name = json.loads('${escapedName}')
+    
+    if dataframe_name in ns:
+        df = ns[dataframe_name]
+        
+        # Check if it's actually a DataFrame
+        try:
+            import pandas as pd
+            if isinstance(df, pd.DataFrame):
+                # Display the dataframe as HTML table
+                # Limit to first 100 rows for performance
+                df_display = df.head(100)
+                html_table = df_display.to_html(classes='dataframe', table_id='dataframe-view', escape=False)
+                
+                # Add some styling
+                styled_html = f"""
+<style>
+.dataframe {{
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.9em;
+    font-family: sans-serif;
+    min-width: 400px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+}}
+.dataframe thead tr {{
+    background-color: #009879;
+    color: #ffffff;
+    text-align: left;
+}}
+.dataframe th,
+.dataframe td {{
+    padding: 12px 15px;
+}}
+.dataframe tbody tr {{
+    border-bottom: 1px solid #dddddd;
+}}
+.dataframe tbody tr:nth-of-type(even) {{
+    background-color: #f3f3f3;
+}}
+.dataframe tbody tr:last-of-type {{
+    border-bottom: 2px solid #009879;
+}}
+</style>
+<div style="margin: 10px 0;">
+    <h3 style="font-family: sans-serif; color: #333;">DataFrame: <code>{dataframe_name}</code></h3>
+    <p style="font-family: sans-serif; color: #666; font-size: 0.9em;">
+        Shape: {df.shape[0]} rows × {df.shape[1]} columns
+        {f"(showing first 100 rows)" if len(df) > 100 else ""}
+    </p>
+    {html_table}
+</div>
+"""
+                display(HTML(styled_html))
+            else:
+                print(json.dumps({'error': 'Variable is not a DataFrame'}))
+                sys.stdout.flush()
+        except ImportError:
+            print(json.dumps({'error': 'pandas not available'}))
+            sys.stdout.flush()
+        except Exception as e:
+            print(json.dumps({'error': str(e)}))
+            sys.stdout.flush()
+    else:
+        print(json.dumps({'error': 'DataFrame not found in namespace'}))
+        sys.stdout.flush()
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
     sys.stdout.flush()
 `;
             }
