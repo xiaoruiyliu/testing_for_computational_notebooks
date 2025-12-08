@@ -599,18 +599,17 @@ if 'tests' in globals():
             
             keywords = {'assert', 'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is', 'all', 'any', 'len', 'print', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'bool'}
             
-            # First, collect all specific paths (subscripts and attributes)
+            # First, collect all specific paths (only subscripts, not attributes)
+            # Attributes like data.isna() are method calls, not assignments, so we treat them as base variable usage
             for node in ast.walk(test_tree):
-                # Subscripts: data["email"] - these are specific paths
+                # Subscripts: data["email"] - these are specific paths that can be assigned
                 if isinstance(node, ast.Subscript):
                     path = get_test_subscript_path(node)
                     if path:
                         test_specific_paths.add(path)
-                # Attributes: data.email - these are specific paths
-                elif isinstance(node, ast.Attribute):
-                    path = get_test_attribute_path(node)
-                    if path:
-                        test_specific_paths.add(path)
+                # Attributes: data.isna() - these are method calls, not assignments
+                # We don't add them to test_specific_paths because they can't be assigned
+                # The base variable (data) will be captured in test_base_vars below
             
             # Then collect all base variables - all Name nodes that aren't keywords
             for node in ast.walk(test_tree):
@@ -1014,39 +1013,117 @@ try:
         # Try to identify failing rows by re-executing test logic partially
         failing_indices = []
         failing_values = []
+        aggregation_type = None  # Track if this is an aggregation test
         
         try:
             # For DataFrame column tests, check which rows fail
             if isinstance(df_value, pd.DataFrame) and test_column:
                 if test_column in df_value.columns:
-                    # Try to understand what the test is checking
-                    # Common patterns: .notna(), .all(), comparisons, etc.
                     test_series = df_value[test_column]
                     
-                    # Try to evaluate the test condition on the series
-                    # This is a simplified check - we'll use LLM for more complex analysis
-                    try:
-                        # Check for common patterns in test code
-                        if '.notna()' in test_code or '.isna()' in test_code:
-                            if '.notna()' in test_code:
-                                failing_mask = test_series.isna()
-                            else:
-                                failing_mask = test_series.notna()
-                            failing_indices = test_series[failing_mask].index.tolist()[:10]  # Limit to 10
-                            failing_values = test_series[failing_mask].tolist()[:10]
-                        elif '>' in test_code or '<' in test_code or '>=' in test_code or '<=' in test_code:
-                            # Try to extract comparison value
-                            # This is simplified - LLM will do better
-                            failing_indices = test_series.index.tolist()[:5]
-                            failing_values = test_series.tolist()[:5]
-                        else:
-                            # Generic: get some sample values
-                            failing_indices = test_series.index.tolist()[:5]
-                            failing_values = test_series.tolist()[:5]
-                    except Exception as e:
-                        debug_log("Error identifying failing rows: " + str(e))
-                        failing_indices = test_series.index.tolist()[:5]
-                        failing_values = test_series.tolist()[:5]
+                    # Check for aggregation functions with comparisons (e.g., .max() < 2000000)
+                    aggregation_functions = {
+                        '.max()': 'max',
+                        '.min()': 'min',
+                        '.mean()': 'mean',
+                        '.sum()': 'sum',
+                        '.std()': 'std',
+                        '.median()': 'median'
+                    }
+                    
+                    found_aggregation = None
+                    for agg_pattern, agg_name in aggregation_functions.items():
+                        if agg_pattern in test_code:
+                            found_aggregation = agg_name
+                            aggregation_type = agg_name
+                            break
+                    
+                    # If we found an aggregation function, check if the comparison fails
+                    if found_aggregation and ('>' in test_code or '<' in test_code or '>=' in test_code or '<=' in test_code):
+                        try:
+                            import re
+                            # Extract comparison operator and threshold
+                            comparison_match = re.search(r'([<>]=?)\s*(\d+\.?\d*)', test_code)
+                            if comparison_match:
+                                operator = comparison_match.group(1)
+                                threshold = float(comparison_match.group(2))
+                                
+                                # Compute aggregation value
+                                if found_aggregation == 'max':
+                                    agg_value = test_series.max()
+                                    # Check if condition is violated
+                                    condition_fails = (operator == '<' and agg_value >= threshold) or \
+                                                     (operator == '<=' and agg_value > threshold) or \
+                                                     (operator == '>' and agg_value <= threshold) or \
+                                                     (operator == '>=' and agg_value < threshold)
+                                    
+                                    if condition_fails:
+                                        # Find rows where max value occurs
+                                        max_indices = test_series[test_series == agg_value].index.tolist()
+                                        failing_indices = max_indices[:1]  # Just the first occurrence
+                                        failing_values = [agg_value]
+                                        debug_log(f"Aggregation test failed: max() = {agg_value} {operator} {threshold}")
+                                    
+                                elif found_aggregation == 'min':
+                                    agg_value = test_series.min()
+                                    condition_fails = (operator == '<' and agg_value >= threshold) or \
+                                                     (operator == '<=' and agg_value > threshold) or \
+                                                     (operator == '>' and agg_value <= threshold) or \
+                                                     (operator == '>=' and agg_value < threshold)
+                                    
+                                    if condition_fails:
+                                        min_indices = test_series[test_series == agg_value].index.tolist()
+                                        failing_indices = min_indices[:1]
+                                        failing_values = [agg_value]
+                                        debug_log(f"Aggregation test failed: min() = {agg_value} {operator} {threshold}")
+                                    
+                                else:
+                                    # For other aggregations (mean, sum, etc.), just compute and check
+                                    agg_value = getattr(test_series, found_aggregation)()
+                                    condition_fails = (operator == '<' and agg_value >= threshold) or \
+                                                     (operator == '<=' and agg_value > threshold) or \
+                                                     (operator == '>' and agg_value <= threshold) or \
+                                                     (operator == '>=' and agg_value < threshold)
+                                    
+                                    if condition_fails:
+                                        failing_indices = []  # No specific row for mean/sum
+                                        failing_values = [agg_value]
+                                        debug_log(f"Aggregation test failed: {found_aggregation}() = {agg_value} {operator} {threshold}")
+                        except Exception as agg_error:
+                            debug_log("Error checking aggregation: " + str(agg_error))
+                    
+                    # If no aggregation or aggregation didn't fail, check for row-level patterns
+                    if not failing_indices and not failing_values:
+                        try:
+                            if '.notna()' in test_code or '.isna()' in test_code:
+                                if '.notna()' in test_code:
+                                    failing_mask = test_series.isna()
+                                else:
+                                    failing_mask = test_series.notna()
+                                failing_indices = test_series[failing_mask].index.tolist()[:10]
+                                failing_values = test_series[failing_mask].tolist()[:10]
+                            elif '>' in test_code or '<' in test_code or '>=' in test_code or '<=' in test_code:
+                                # Row-level comparison (not aggregation)
+                                import re
+                                comparison_match = re.search(r'([<>]=?)\s*(\d+\.?\d*)', test_code)
+                                if comparison_match:
+                                    operator = comparison_match.group(1)
+                                    threshold = float(comparison_match.group(2))
+                                    
+                                    # Find rows that violate the condition
+                                    if operator == '<':
+                                        failing_mask = test_series >= threshold
+                                    elif operator == '<=':
+                                        failing_mask = test_series > threshold
+                                    elif operator == '>':
+                                        failing_mask = test_series <= threshold
+                                    elif operator == '>=':
+                                        failing_mask = test_series < threshold
+                                    
+                                    failing_indices = test_series[failing_mask].index.tolist()[:10]
+                                    failing_values = test_series[failing_mask].tolist()[:10]
+                        except Exception as e:
+                            debug_log("Error identifying failing rows: " + str(e))
         except Exception as e:
             debug_log("Error processing DataFrame: " + str(e))
         
@@ -1054,135 +1131,163 @@ try:
         dependencies = []
         dataflow_chain = []
         
-        try:
-            # Parse cell code to find assignments
-            cell_tree = ast.parse(cell_code)
-            
-            # Find all assignments in the cell
-            assignments = {}
-            for node in ast.walk(cell_tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Subscript):
-                            # df["column"] = ...
-                            if isinstance(target.value, ast.Name):
-                                base_var = target.value.id
-                                if hasattr(ast, 'Constant') and isinstance(target.slice, ast.Constant):
-                                    col = target.slice.value
-                                elif hasattr(ast, 'Index') and isinstance(target.slice, ast.Index):
-                                    if isinstance(target.slice.value, ast.Str):
-                                        col = target.slice.value.s
-                                    elif isinstance(target.slice.value, ast.Constant):
-                                        col = target.slice.value.value
-                                    else:
-                                        col = None
-                                elif isinstance(target.slice, ast.Str):
-                                    col = target.slice.s
-                                else:
-                                    col = None
-                                
-                                if col and isinstance(col, str):
-                                    key = base_var + '["' + col + '"]'
-                                    # Get the right-hand side expression as string
-                                    try:
-                                        # Try ast.unparse (Python 3.9+)
-                                        if hasattr(ast, 'unparse'):
-                                            try:
-                                                rhs_code = ast.unparse(node.value)
-                                            except:
-                                                rhs_code = None
-                                        else:
-                                            rhs_code = None
-                                        
-                                        # Fallback: extract from source code if available
-                                        if rhs_code is None:
-                                            # Try to get source code directly
-                                            try:
-                                                import inspect
-                                                # This won't work for exec'd code, so use a simple representation
-                                                rhs_code = "expression"
-                                            except:
-                                                rhs_code = "expression"
-                                        
-                                        assignments[key] = {
-                                            'rhs': rhs_code,
-                                            'node': node
-                                        }
-                                    except Exception as assign_error:
-                                        debug_log("Error processing assignment: " + str(assign_error))
-                                        assignments[key] = {'rhs': 'expression', 'node': node}
-            
-            # Build dependency chain for test_column
-            if test_column and df_var:
-                current_path = df_var + '["' + test_column + '"]'
-                visited = set()
+        # For aggregation functions, only show the final column (one layer deep)
+        # Aggregations collapse rows, so showing the full chain doesn't make sense
+        if aggregation_type and test_column and df_var:
+            # Just show the final column with the aggregated value
+            current_path = df_var + '["' + test_column + '"]'
+            if df_var in globals_dict:
+                var_val = globals_dict[df_var]
+                if isinstance(var_val, pd.DataFrame) and test_column in var_val.columns:
+                    try:
+                        if aggregation_type == 'max':
+                            agg_val = var_val[test_column].max()
+                        elif aggregation_type == 'min':
+                            agg_val = var_val[test_column].min()
+                        elif aggregation_type == 'mean':
+                            agg_val = var_val[test_column].mean()
+                        elif aggregation_type == 'sum':
+                            agg_val = var_val[test_column].sum()
+                        else:
+                            agg_val = getattr(var_val[test_column], aggregation_type)()
+                        
+                        dataflow_chain.append({
+                            'path': current_path,
+                            'values': [str(agg_val)]
+                        })
+                    except Exception as agg_err:
+                        debug_log("Error computing aggregation for display: " + str(agg_err))
+        else:
+            # For non-aggregation tests, trace the full dependency chain
+            try:
+                # Parse cell code to find assignments
+                cell_tree = ast.parse(cell_code)
                 
-                def trace_dependency(path, depth=0):
-                    if depth > 10 or path in visited:  # Prevent infinite loops
-                        return []
-                    visited.add(path)
-                    
-                    if path in assignments:
-                        rhs = assignments[path]['rhs']
-                        # Extract variable references from RHS
-                        rhs_tree = ast.parse(rhs) if rhs != 'expression' else None
-                        deps = []
-                        if rhs_tree:
-                            for node in ast.walk(rhs_tree):
-                                if isinstance(node, ast.Subscript):
-                                    if isinstance(node.value, ast.Name):
-                                        base = node.value.id
-                                        if hasattr(ast, 'Constant') and isinstance(node.slice, ast.Constant):
-                                            col = node.slice.value
-                                        elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
-                                            if isinstance(node.slice.value, ast.Str):
-                                                col = node.slice.value.s
-                                            elif isinstance(node.slice.value, ast.Constant):
-                                                col = node.slice.value.value
-                                            else:
-                                                col = None
-                                        elif isinstance(node.slice, ast.Str):
-                                            col = node.slice.s
+                # Find all assignments in the cell
+                assignments = {}
+                for node in ast.walk(cell_tree):
+                    if isinstance(node, ast.Assign):
+                        for target in node.targets:
+                            if isinstance(target, ast.Subscript):
+                                # df["column"] = ...
+                                if isinstance(target.value, ast.Name):
+                                    base_var = target.value.id
+                                    if hasattr(ast, 'Constant') and isinstance(target.slice, ast.Constant):
+                                        col = target.slice.value
+                                    elif hasattr(ast, 'Index') and isinstance(target.slice, ast.Index):
+                                        if isinstance(target.slice.value, ast.Str):
+                                            col = target.slice.value.s
+                                        elif isinstance(target.slice.value, ast.Constant):
+                                            col = target.slice.value.value
                                         else:
                                             col = None
-                                        
-                                        if col and isinstance(col, str):
-                                            dep_path = base + '["' + col + '"]'
-                                            deps.append(dep_path)
-                                            # Recursively trace
-                                            sub_deps = trace_dependency(dep_path, depth + 1)
-                                            deps.extend(sub_deps)
+                                    elif isinstance(target.slice, ast.Str):
+                                        col = target.slice.s
+                                    else:
+                                        col = None
+                                    
+                                    if col and isinstance(col, str):
+                                        key = base_var + '["' + col + '"]'
+                                        # Get the right-hand side expression as string
+                                        try:
+                                            # Try ast.unparse (Python 3.9+)
+                                            if hasattr(ast, 'unparse'):
+                                                try:
+                                                    rhs_code = ast.unparse(node.value)
+                                                except:
+                                                    rhs_code = None
+                                            else:
+                                                rhs_code = None
+                                            
+                                            # Fallback: extract from source code if available
+                                            if rhs_code is None:
+                                                # Try to get source code directly
+                                                try:
+                                                    import inspect
+                                                    # This won't work for exec'd code, so use a simple representation
+                                                    rhs_code = "expression"
+                                                except:
+                                                    rhs_code = "expression"
+                                            
+                                            assignments[key] = {
+                                                'rhs': rhs_code,
+                                                'node': node
+                                            }
+                                        except Exception as assign_error:
+                                            debug_log("Error processing assignment: " + str(assign_error))
+                                            assignments[key] = {'rhs': 'expression', 'node': node}
+                
+                # Build dependency chain for test_column
+                if test_column and df_var:
+                    current_path = df_var + '["' + test_column + '"]'
+                    visited = set()
+                    
+                    def trace_dependency(path, depth=0):
+                        if depth > 10 or path in visited:  # Prevent infinite loops
+                            return []
+                        visited.add(path)
                         
-                        return deps
-                    return []
-                
-                dependencies = trace_dependency(current_path)
-                # Reverse to get forward flow: source -> ... -> target
-                dependencies.reverse()
-                dependencies.append(current_path)
-                
-                # Get sample values for each step in the chain
-                for i, dep_path in enumerate(dependencies):
-                    parts = dep_path.split('["')
-                    if len(parts) == 2:
-                        var_name = parts[0]
-                        col_name = parts[1].rstrip('"]')
-                        if var_name in globals_dict:
-                            var_val = globals_dict[var_name]
-                            if isinstance(var_val, pd.DataFrame) and col_name in var_val.columns:
-                                # Get values at failing indices if available
-                                if failing_indices:
-                                    sample_values = var_val.loc[failing_indices[:3], col_name].tolist()
-                                else:
-                                    sample_values = var_val[col_name].head(3).tolist()
-                                
-                                dataflow_chain.append({
-                                    'path': dep_path,
-                                    'values': [str(v) for v in sample_values]
-                                })
-        except Exception as e:
-            debug_log("Error tracing dependencies: " + str(e))
-            debug_log(traceback.format_exc())
+                        if path in assignments:
+                            rhs = assignments[path]['rhs']
+                            # Extract variable references from RHS
+                            rhs_tree = ast.parse(rhs) if rhs != 'expression' else None
+                            deps = []
+                            if rhs_tree:
+                                for node in ast.walk(rhs_tree):
+                                    if isinstance(node, ast.Subscript):
+                                        if isinstance(node.value, ast.Name):
+                                            base = node.value.id
+                                            if hasattr(ast, 'Constant') and isinstance(node.slice, ast.Constant):
+                                                col = node.slice.value
+                                            elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
+                                                if isinstance(node.slice.value, ast.Str):
+                                                    col = node.slice.value.s
+                                                elif isinstance(node.slice.value, ast.Constant):
+                                                    col = node.slice.value.value
+                                                else:
+                                                    col = None
+                                            elif isinstance(node.slice, ast.Str):
+                                                col = node.slice.s
+                                            else:
+                                                col = None
+                                            
+                                            if col and isinstance(col, str):
+                                                dep_path = base + '["' + col + '"]'
+                                                deps.append(dep_path)
+                                                # Recursively trace
+                                                sub_deps = trace_dependency(dep_path, depth + 1)
+                                                deps.extend(sub_deps)
+                            
+                            return deps
+                        return []
+                    
+                    dependencies = trace_dependency(current_path)
+                    # Reverse to get forward flow: source -> ... -> target
+                    dependencies.reverse()
+                    dependencies.append(current_path)
+                    
+                    # Get sample values for each step in the chain
+                    for i, dep_path in enumerate(dependencies):
+                        parts = dep_path.split('["')
+                        if len(parts) == 2:
+                            var_name = parts[0]
+                            col_name = parts[1].rstrip('"]')
+                            if var_name in globals_dict:
+                                var_val = globals_dict[var_name]
+                                if isinstance(var_val, pd.DataFrame) and col_name in var_val.columns:
+                                    # For intermediate steps, get values at failing indices
+                                    if failing_indices:
+                                        sample_values = var_val.loc[failing_indices[:3], col_name].tolist()
+                                    else:
+                                        sample_values = var_val[col_name].head(3).tolist()
+                                    
+                                    dataflow_chain.append({
+                                        'path': dep_path,
+                                        'values': [str(v) for v in sample_values]
+                                    })
+            except Exception as e:
+                debug_log("Error tracing dependencies: " + str(e))
+                debug_log(traceback.format_exc())
         
         # Prepare data for LLM analysis
         llm_prompt_data = {
@@ -1202,8 +1307,8 @@ try:
             
             # Use OpenAI-compatible API (configurable)
             # Default to a local endpoint or OpenAI
-            api_url = ns.get('TEST_LLM_API_URL', 'https://api.openai.com/v1/chat/completions')
-            api_key = ns.get('TEST_LLM_API_KEY', '')
+            api_url = ns.get('TESTING_ANALYSIS_LLM_API_URL', 'https://api.openai.com/v1/chat/completions')
+            api_key = ns.get('TESTING_ANALYSIS_LLM_API_KEY', '')
             
             # Only try LLM if API key is provided or it's a local endpoint
             # Otherwise, skip directly to fallback
@@ -1220,8 +1325,8 @@ Provide a concise analysis showing the data transformation chain that leads to t
 Format as: source_value --> intermediate_value --> ... --> final_value --> False
 Show 3-5 example failing cases in this format."""
 
-                data = {
-                    'model': ns.get('TEST_LLM_MODEL', 'gpt-3.5-turbo'),
+                llm_request_payload = {
+                    'model': ns.get('TESTING_ANALYSIS_LLM_MODEL', 'gpt-3.5-turbo'),
                     'messages': [
                         {'role': 'system', 'content': 'You are a data analysis assistant. Analyze dataflow and show failing cases concisely.'},
                         {'role': 'user', 'content': prompt}
@@ -1233,7 +1338,7 @@ Show 3-5 example failing cases in this format."""
                 try:
                     req = urllib.request.Request(
                         api_url,
-                        data=json.dumps(data).encode('utf-8'),
+                        data=json.dumps(llm_request_payload).encode('utf-8'),
                         headers={
                             'Content-Type': 'application/json',
                             'Authorization': f'Bearer {api_key}' if api_key else ''
@@ -1279,36 +1384,54 @@ Show 3-5 example failing cases in this format."""
                         path_names.append(path)
                 
                 if path_names:
-                    # Show example values for each step
-                    example_lines = []
-                    num_examples = min(3, len(failing_values) if failing_values else 1)
-                    
-                    for i in range(num_examples):
-                        example_parts = []
-                        for j, step in enumerate(dataflow_chain):
-                            if step.get('values') and len(step['values']) > i:
-                                val = step['values'][i]
-                                # Extract column name for display
-                                path = step.get('path', '')
-                                if '["' in path and '"]' in path:
-                                    col_name = path.split('["')[1].rstrip('"]')
-                                    example_parts.append(f"{col_name}: {val}")
-                                else:
-                                    example_parts.append(f"{path}: {val}")
-                        
-                        if example_parts:
-                            example_line = ' --> '.join(example_parts)
-                            if failing_values and i < len(failing_values):
-                                example_line += f' --> False (value: {failing_values[i]})'
+                    # For aggregation functions, show only the final column (one layer deep)
+                    if aggregation_type and failing_values:
+                        # Show aggregation-specific format - just the column and aggregated value
+                        if dataflow_chain and len(dataflow_chain) > 0:
+                            # Get the column name from the path
+                            path = dataflow_chain[0].get('path', '')
+                            if '["' in path and '"]' in path:
+                                col_name = path.split('["')[1].rstrip('"]')
                             else:
-                                example_line += ' --> False'
-                            example_lines.append(example_line)
-                    
-                    if example_lines:
-                        llm_result = '\\n'.join(example_lines)
+                                col_name = path
+                            
+                            agg_value = failing_values[0] if failing_values else 'N/A'
+                            # Show: column: aggregated_value --> aggregation() = value --> False
+                            llm_result = f"{col_name}: {agg_value} --> {aggregation_type}() = {agg_value} --> False"
+                        else:
+                            agg_value = failing_values[0] if failing_values else 'N/A'
+                            llm_result = f"{aggregation_type}() = {agg_value} --> False"
                     else:
-                        # Fallback: just show the path chain
-                        llm_result = ' --> '.join(path_names) + ' --> False'
+                        # For row-level checks, show multiple examples
+                        example_lines = []
+                        num_examples = min(3, len(failing_values) if failing_values else 1)
+                        
+                        for i in range(num_examples):
+                            example_parts = []
+                            for j, step in enumerate(dataflow_chain):
+                                if step.get('values') and len(step['values']) > i:
+                                    val = step['values'][i]
+                                    # Extract column name for display
+                                    path = step.get('path', '')
+                                    if '["' in path and '"]' in path:
+                                        col_name = path.split('["')[1].rstrip('"]')
+                                        example_parts.append(f"{col_name}: {val}")
+                                    else:
+                                        example_parts.append(f"{path}: {val}")
+                            
+                            if example_parts:
+                                example_line = ' --> '.join(example_parts)
+                                if failing_values and i < len(failing_values):
+                                    example_line += f' --> False (value: {failing_values[i]})'
+                                else:
+                                    example_line += ' --> False'
+                                example_lines.append(example_line)
+                        
+                        if example_lines:
+                            llm_result = '\\n'.join(example_lines)
+                        else:
+                            # Fallback: just show the path chain
+                            llm_result = ' --> '.join(path_names) + ' --> False'
                 else:
                     llm_result = 'Dataflow analysis unavailable'
             else:
