@@ -11,8 +11,9 @@ define([
     './testChecker',
     './testNamesWidget',
     './dataframeViewer',
-    './toolbar'
-], function(Jupyter, events, ConstantsModule, TestWidgetModule, TestCheckerModule, TestNamesWidgetModule, DataFrameViewerModule, ToolbarModule) {
+    './toolbar',
+    './lockedCellsTest'
+], function(Jupyter, events, ConstantsModule, TestWidgetModule, TestCheckerModule, TestNamesWidgetModule, DataFrameViewerModule, ToolbarModule, LockedCellsTestModule) {
     'use strict';
 
     // Initialize all modules with constants
@@ -22,6 +23,7 @@ define([
     var TestNamesWidget = TestNamesWidgetModule.init(Constants);
     var DataFrameViewer = DataFrameViewerModule.init(Constants);
     var Toolbar = ToolbarModule.init(Constants);
+    var LockedCellsTest = LockedCellsTestModule.init(Constants);
 
     /**
      * Initialize the extension

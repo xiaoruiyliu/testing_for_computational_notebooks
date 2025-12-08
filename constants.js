@@ -527,11 +527,44 @@ def on_proceed_click(b):
                     'from IPython import get_ipython\\\\n' +
                     'ns = get_ipython().user_ns\\\\n' +
                     'locked_json = ' + JSON.stringify(lockedJson) + '\\\\n' +
-                    'locked_cells = json.loads(locked_json)\\\\n' +
+                    'new_locked_cells = json.loads(locked_json)\\\\n' +
                     'ns["locked_cells_data"] = ns.get("locked_cells_data", {{}})\\\\n' +
-                    'ns["locked_cells_data"]["' + dfName + '"] = locked_cells\\\\n' +
-                    'print("Committed " + str(len(locked_cells)) + " locked cell(s)")';
-                IPython.notebook.kernel.execute(code, {{silent: false}});
+                    'df_name = "' + dfName + '"\\\\n' +
+                    '\\\\n' +
+                    '# Get existing locked cells for this DataFrame\\\\n' +
+                    'existing_locked_cells = ns["locked_cells_data"].get(df_name, [])\\\\n' +
+                    '\\\\n' +
+                    '# Create a dictionary for quick lookup by (row_index, column_name)\\\\n' +
+                    'existing_dict = {{}}\\\\n' +
+                    'for cell in existing_locked_cells:\\\\n' +
+                    '    key = (str(cell.get("row_index", "")), str(cell.get("column_name", "")))\\\\n' +
+                    '    existing_dict[key] = cell\\\\n' +
+                    '\\\\n' +
+                    '# Update or add new locked cells\\\\n' +
+                    'for new_cell in new_locked_cells:\\\\n' +
+                    '    key = (str(new_cell.get("row_index", "")), str(new_cell.get("column_name", "")))\\\\n' +
+                    '    existing_dict[key] = new_cell  # Update if exists, add if new\\\\n' +
+                    '\\\\n' +
+                    '# Convert back to list and store\\\\n' +
+                    'ns["locked_cells_data"][df_name] = list(existing_dict.values())\\\\n' +
+                    'total_count = len(ns["locked_cells_data"][df_name])\\\\n' +
+                    'new_count = len(new_locked_cells)\\\\n' +
+                    'print("Committed " + str(new_count) + " locked cell(s). Total: " + str(total_count) + " locked cell(s) for dataframe \\\\"" + df_name + "\\\\"")';
+                IPython.notebook.kernel.execute(code, {{
+                    iopub: {{
+                        output: function(msg) {{
+                            if (msg.content && msg.content.name === 'stdout') {{
+                                // After commit completes, trigger locked cells test update
+                                setTimeout(function() {{
+                                    if (window.lockedCellsTestManager && window.lockedCellsTestManager.updateLockedCellsTest) {{
+                                        window.lockedCellsTestManager.updateLockedCellsTest();
+                                    }}
+                                }}, 100);
+                            }}
+                        }}
+                    }},
+                    silent: false
+                }});
             }}
         }}
         
@@ -628,9 +661,18 @@ def debug_log(msg):
     import sys
     print("DEBUG: " + str(msg), file=sys.stderr)
 
-# Check if tests dictionary exists
-if 'tests' in globals():
+# Check if tests dictionary exists (check both globals and namespace)
+from IPython import get_ipython
+ns = get_ipython().user_ns
+
+# Get tests from namespace first, then globals
+tests_dict = {}
+if 'tests' in ns:
+    tests_dict = ns['tests']
+elif 'tests' in globals():
     tests_dict = globals()['tests']
+
+if tests_dict:
     debug_log("Found " + str(len(tests_dict)) + " test(s) in tests dictionary")
     
     # Extract specific paths assigned or modified in the cell code
@@ -641,26 +683,96 @@ if 'tests' in globals():
         assigned_paths = set()      # Specific paths: {'data', 'data["email"]', 'x'}
         
         def get_subscript_path(node):
-            """Convert a Subscript node to a string path like 'data["email"]'"""
-            if isinstance(node.value, ast.Name):
+            """Convert a Subscript node to a string path like 'data["email"]' or 'data.loc[1, "name"]'"""
+            # Handle nested attribute access like data.loc[...] or data.iloc[...]
+            if isinstance(node.value, ast.Attribute):
+                # Recursively get the base path
+                base_path = get_attribute_path(node.value)
+                if base_path:
+                    # Extract the slice/index
+                    slice_str = get_slice_string(node.slice)
+                    if slice_str:
+                        return base_path + '[' + slice_str + ']'
+            elif isinstance(node.value, ast.Name):
                 base = node.value.id
+                # For simple subscripts like data["email"], check if it's a simple string key
                 # Handle different AST node types for slice
                 if hasattr(ast, 'Constant') and isinstance(node.slice, ast.Constant):
                     key = node.slice.value
+                    if isinstance(key, str):
+                        return base + '["' + key + '"]'
                 elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
                     if isinstance(node.slice.value, ast.Str):
                         key = node.slice.value.s
+                        return base + '["' + key + '"]'
                     elif isinstance(node.slice.value, ast.Constant):
                         key = node.slice.value.value
-                    else:
-                        key = None
+                        if isinstance(key, str):
+                            return base + '["' + key + '"]'
                 elif isinstance(node.slice, ast.Str):
                     key = node.slice.s
-                else:
-                    key = None
-                
-                if isinstance(key, str):
                     return base + '["' + key + '"]'
+                # For complex slices (tuples, etc.), use get_slice_string
+                slice_str = get_slice_string(node.slice)
+                if slice_str:
+                    return base + '[' + slice_str + ']'
+            return None
+        
+        def get_slice_string(slice_node):
+            """Convert a slice node to a string representation"""
+            # Handle tuple slices like (1, 'name') for .loc[1, 'name']
+            if isinstance(slice_node, ast.Tuple):
+                elts = []
+                for elt in slice_node.elts:
+                    elt_str = get_slice_element_string(elt)
+                    if elt_str is not None:
+                        elts.append(elt_str)
+                if elts:
+                    return ', '.join(elts)
+            else:
+                # Single element slice
+                return get_slice_element_string(slice_node)
+        
+        def get_slice_element_string(elt):
+            """Convert a slice element to a string"""
+            if hasattr(ast, 'Constant') and isinstance(elt, ast.Constant):
+                val = elt.value
+                if isinstance(val, str):
+                    return repr(val)
+                else:
+                    return str(val)
+            elif hasattr(ast, 'Index') and isinstance(elt, ast.Index):
+                if isinstance(elt.value, ast.Str):
+                    return repr(elt.value.s)
+                elif isinstance(elt.value, ast.Constant):
+                    val = elt.value.value
+                    if isinstance(val, str):
+                        return repr(val)
+                    else:
+                        return str(val)
+                else:
+                    # Try to evaluate constant numeric values
+                    try:
+                        if hasattr(ast, 'Constant') and isinstance(elt.value, ast.Constant):
+                            return str(elt.value.value)
+                    except:
+                        pass
+            elif isinstance(elt, ast.Str):
+                return repr(elt.s)
+            elif isinstance(elt, ast.Num):
+                return str(elt.n)
+            elif hasattr(ast, 'Constant') and isinstance(elt, ast.Constant):
+                val = elt.value
+                if isinstance(val, str):
+                    return repr(val)
+                else:
+                    return str(val)
+            # For other cases, try to get a string representation
+            try:
+                if isinstance(elt, ast.Name):
+                    return elt.id
+            except:
+                pass
             return None
         
         def get_attribute_path(node):
@@ -676,13 +788,21 @@ if 'tests' in globals():
                     if isinstance(target, ast.Name):
                         assigned_base_vars.add(target.id)
                         assigned_paths.add(target.id)
-                    # Subscript assignment: data["email"] = ...
+                    # Subscript assignment: data["email"] = ... or data.loc[1, "name"] = ...
                     elif isinstance(target, ast.Subscript):
                         path = get_subscript_path(target)
                         if path:
                             assigned_paths.add(path)
+                        # Extract base variable - handle both direct (data["email"]) and attribute-based (data.loc[...])
                         if isinstance(target.value, ast.Name):
                             assigned_base_vars.add(target.value.id)
+                        elif isinstance(target.value, ast.Attribute):
+                            # For data.loc[...], extract the base variable (data)
+                            attr_node = target.value
+                            while isinstance(attr_node, ast.Attribute):
+                                attr_node = attr_node.value
+                            if isinstance(attr_node, ast.Name):
+                                assigned_base_vars.add(attr_node.id)
                     # Attribute assignment: obj.attr = ...
                     elif isinstance(target, ast.Attribute):
                         path = get_attribute_path(target)
@@ -707,7 +827,14 @@ if 'tests' in globals():
     debug_log("Cell assigned_paths: " + str(list(assigned_paths)))
     
     # Initialize test_enabled dictionary if it doesn't exist
-    test_enabled_dict = globals().get('test_enabled', {})
+    # Check both globals and namespace (ns) - test_enabled is typically stored in ns
+    from IPython import get_ipython
+    ns = get_ipython().user_ns
+    test_enabled_dict = {}
+    if 'test_enabled' in globals():
+        test_enabled_dict.update(globals()['test_enabled'])
+    if 'test_enabled' in ns:
+        test_enabled_dict.update(ns['test_enabled'])
     
     # Run tests only if their specific paths were assigned in this cell
     for test_name, test_logic in tests_dict.items():
@@ -725,33 +852,96 @@ if 'tests' in globals():
             test_specific_paths = set()  # Only specific paths with subscripts/attributes: {'data["email"]', 'obj.attr'}
             test_base_vars = set()  # Base variables only: {'data', 'x'}
             
+            def get_test_slice_string(slice_node):
+                """Convert a slice node to a string representation for test paths"""
+                # Handle tuple slices like (1, 'name') for .loc[1, 'name']
+                if isinstance(slice_node, ast.Tuple):
+                    elts = []
+                    for elt in slice_node.elts:
+                        elt_str = get_test_slice_element_string(elt)
+                        if elt_str is not None:
+                            elts.append(elt_str)
+                    if elts:
+                        return ', '.join(elts)
+                else:
+                    # Single element slice
+                    return get_test_slice_element_string(slice_node)
+            
+            def get_test_slice_element_string(elt):
+                """Convert a slice element to a string for test paths"""
+                if hasattr(ast, 'Constant') and isinstance(elt, ast.Constant):
+                    val = elt.value
+                    if isinstance(val, str):
+                        return repr(val)
+                    else:
+                        return str(val)
+                elif hasattr(ast, 'Index') and isinstance(elt, ast.Index):
+                    if isinstance(elt.value, ast.Str):
+                        return repr(elt.value.s)
+                    elif isinstance(elt.value, ast.Constant):
+                        val = elt.value.value
+                        if isinstance(val, str):
+                            return repr(val)
+                        else:
+                            return str(val)
+                elif isinstance(elt, ast.Str):
+                    return repr(elt.s)
+                elif isinstance(elt, ast.Num):
+                    return str(elt.n)
+                elif hasattr(ast, 'Constant') and isinstance(elt, ast.Constant):
+                    val = elt.value
+                    if isinstance(val, str):
+                        return repr(val)
+                    else:
+                        return str(val)
+                try:
+                    if isinstance(elt, ast.Name):
+                        return elt.id
+                except:
+                    pass
+                return None
+            
             def get_test_subscript_path(node):
-                """Convert a Subscript node to a string path like 'data["email"]'"""
-                # Handle different AST node types for slice
-                def extract_key(slice_node):
-                    if hasattr(ast, 'Constant') and isinstance(slice_node, ast.Constant):
-                        return slice_node.value
-                    elif hasattr(ast, 'Index') and isinstance(slice_node, ast.Index):
-                        if isinstance(slice_node.value, ast.Str):
-                            return slice_node.value.s
-                        elif isinstance(slice_node.value, ast.Constant):
-                            return slice_node.value.value
-                    elif isinstance(slice_node, ast.Str):
-                        return slice_node.s
-                    return None
-                
-                if isinstance(node.value, ast.Name):
+                """Convert a Subscript node to a string path like 'data["email"]' or 'data.loc[1, "name"]'"""
+                # Handle nested attribute access like data.loc[...] or data.iloc[...]
+                if isinstance(node.value, ast.Attribute):
+                    # Recursively get the base path
+                    base_path = get_test_attribute_path(node.value)
+                    if base_path:
+                        # Extract the slice/index
+                        slice_str = get_test_slice_string(node.slice)
+                        if slice_str:
+                            return base_path + '[' + slice_str + ']'
+                elif isinstance(node.value, ast.Name):
                     base = node.value.id
-                    key = extract_key(node.slice)
-                    if isinstance(key, str):
+                    # For simple subscripts like data["email"], check if it's a simple string key
+                    # Handle different AST node types for slice
+                    if hasattr(ast, 'Constant') and isinstance(node.slice, ast.Constant):
+                        key = node.slice.value
+                        if isinstance(key, str):
+                            return base + '["' + key + '"]'
+                    elif hasattr(ast, 'Index') and isinstance(node.slice, ast.Index):
+                        if isinstance(node.slice.value, ast.Str):
+                            key = node.slice.value.s
+                            return base + '["' + key + '"]'
+                        elif isinstance(node.slice.value, ast.Constant):
+                            key = node.slice.value.value
+                            if isinstance(key, str):
+                                return base + '["' + key + '"]'
+                    elif isinstance(node.slice, ast.Str):
+                        key = node.slice.s
                         return base + '["' + key + '"]'
+                    # For complex slices (tuples, etc.), use get_test_slice_string
+                    slice_str = get_test_slice_string(node.slice)
+                    if slice_str:
+                        return base + '[' + slice_str + ']'
                 elif isinstance(node.value, ast.Subscript):
-                    # Nested: data["email"]["domain"]
+                    # Nested: data["email"]["domain"] or data.loc[0, "col"].loc[1, "row"]
                     parent_path = get_test_subscript_path(node.value)
                     if parent_path:
-                        key = extract_key(node.slice)
-                        if isinstance(key, str):
-                            return parent_path + '["' + key + '"]'
+                        slice_str = get_test_slice_string(node.slice)
+                        if slice_str:
+                            return parent_path + '[' + slice_str + ']'
                 return None
             
             def get_test_attribute_path(node):
@@ -770,14 +960,26 @@ if 'tests' in globals():
             
             keywords = {'assert', 'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is', 'all', 'any', 'len', 'print', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'bool'}
             
-            # First, collect all specific paths (only subscripts, not attributes)
+            # First, collect all specific paths (subscripts and attribute-based subscripts like .loc/.iloc)
             # Attributes like data.isna() are method calls, not assignments, so we treat them as base variable usage
+            # But data.loc[...] and data.iloc[...] are assignments, so we capture them
             for node in ast.walk(test_tree):
-                # Subscripts: data["email"] - these are specific paths that can be assigned
+                # Subscripts: data["email"], data.loc[1, "name"], data.iloc[0, 1] - these are specific paths that can be assigned
                 if isinstance(node, ast.Subscript):
                     path = get_test_subscript_path(node)
                     if path:
                         test_specific_paths.add(path)
+                        # Also add the base variable if it's a .loc or .iloc access
+                        if '.loc[' in path or '.iloc[' in path:
+                            # Extract base variable (everything before .loc or .iloc)
+                            if '.loc[' in path:
+                                base_var = path.split('.loc[')[0]
+                            elif '.iloc[' in path:
+                                base_var = path.split('.iloc[')[0]
+                            else:
+                                base_var = None
+                            if base_var:
+                                test_base_vars.add(base_var)
                 # Attributes: data.isna() - these are method calls, not assignments
                 # We don't add them to test_specific_paths because they can't be assigned
                 # The base variable (data) will be captured in test_base_vars below
