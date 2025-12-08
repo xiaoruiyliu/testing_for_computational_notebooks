@@ -34,14 +34,6 @@ define([
                 handlers.insertInteractiveTestWidget
             )
         );
-
-        // Add View DataFrame button
-        buttons.push(
-            registerToolbarButton(
-                Constants.TOOLBAR_BUTTONS.VIEW_DATAFRAME,
-                handlers.insertDataframeViewerWidget || function() {}
-                )
-        );
         
         // Add View Test Names button
         buttons.push(
@@ -49,6 +41,14 @@ define([
                 Constants.TOOLBAR_BUTTONS.VIEW_TEST_NAMES,
                 handlers.showTestNamesOverlay
             )
+        );
+
+        // Add View DataFrame button
+        buttons.push(
+            registerToolbarButton(
+                Constants.TOOLBAR_BUTTONS.VIEW_DATAFRAME,
+                handlers.insertDataframeViewerWidget || function() {}
+                )
         );
         
         // Add buttons group to toolbar

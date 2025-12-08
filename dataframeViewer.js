@@ -22,7 +22,7 @@ define([
         var newCell = Jupyter.notebook.insert_cell_at_index('code', currentIndex + 1);
         
         // Set the IPython widget code
-        newCell.set_text(Constants.PYTHON_TEMPLATES.DATAFRAME_VIEWER_WIDGET);
+        newCell.set_text(Constants.PYTHON_TEMPLATES.DATAFRAME_LOCK_WIDGET);
         
         // Hide the input area (code) but keep the output (widget) visible
         newCell.element.find('.input').hide();

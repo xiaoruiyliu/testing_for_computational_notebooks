@@ -238,7 +238,7 @@ define([
         // Add dataflow analysis display for failing DataFrame/Series tests
         // This will be populated asynchronously if dataflow analysis is available
         var dataflowContainer = $('<div>')
-            .css('margin-top', '8px')
+                .css('margin-top', '8px')
             .css('display', 'none'); // Hidden by default, shown when dataflow is available
         textContainer.append(dataflowContainer);
     
@@ -422,7 +422,7 @@ define([
                                             null // No dataflow analysis for passed tests
                                         );
                                         cellOutputArea.append(indicatorOutput);
-                                        console.log('Displayed passed indicator for:', testResults.test_name);
+                                    console.log('Displayed passed indicator for:', testResults.test_name);
                                     } catch(e) {
                                         console.log('Error creating passed indicator:', e);
                                         // Continue processing other tests
@@ -440,7 +440,7 @@ define([
                                         );
                                         
                                         cellOutputArea.append(indicatorOutput);
-                                        console.log('Displayed failed indicator for:', testResults.test_name);
+                                    console.log('Displayed failed indicator for:', testResults.test_name);
                                         
                                         // If this test needs dataflow analysis and we haven't done it yet, trigger it
                                         if (testResults.needs_dataflow_analysis && !testResults.dataflow_analysis) {

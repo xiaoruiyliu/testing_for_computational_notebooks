@@ -21,10 +21,10 @@ define(function() {
                 label: 'View Tests'
             },
             VIEW_DATAFRAME: {
-                help: 'View a dataframe from notebook global state',
+                help: 'Lock cells in a dataframe from notebook global state',
                 icon: 'fa-table',
                 actionName: 'view-dataframe',
-                label: 'View DataFrame'
+                label: 'DataFrame Lock'
             }
         },
 
@@ -264,7 +264,7 @@ ipython_display(HTML(css_style))
 
 display(accordion)`,
 
-            DATAFRAME_VIEWER_WIDGET: `from ipywidgets import widgets
+            DATAFRAME_LOCK_WIDGET: `from ipywidgets import widgets
 from IPython.display import display, HTML, clear_output
 import json
 import sys
@@ -331,12 +331,24 @@ def on_proceed_click(b):
         if selected_name and selected_name in ns:
             try:
                 import pandas as pd
+                from IPython.display import Javascript
                 df = ns[selected_name]
                 
                 if isinstance(df, pd.DataFrame):
                     # Display the dataframe as HTML table
                     df_display = df.head(100)
-                    html_table = df_display.to_html(classes='dataframe', table_id='dataframe-view', escape=False)
+                    display_indices = df_display.index.tolist()
+                    display_columns = df_display.columns.tolist()
+                    
+                    # Create table with data attributes embedded directly in cells
+                    html_table = df_display.to_html(classes='dataframe', table_id='dataframe-view-' + selected_name, escape=False)
+                    
+                    # Add data attributes to each cell by modifying the HTML
+                    # We'll do this in JavaScript instead to avoid complex string manipulation
+                    
+                    # Store metadata as data attributes on the container
+                    indices_str = json.dumps(display_indices)
+                    columns_str = json.dumps(display_columns)
                     
                     # Add styling
                     styled_html = f"""
@@ -371,19 +383,178 @@ def on_proceed_click(b):
 .dataframe tbody tr:last-of-type {{
     border-bottom: 2px solid #009879;
 }}
+.dataframe tbody td {{
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.2s;
+}}
+.dataframe tbody td:hover {{
+    background-color: #e8f4f8 !important;
+}}
+.dataframe tbody td.locked {{
+    background-color: #ffcccc !important;
+    border: 2px solid #ff0000;
+}}
+.dataframe tbody td.locked:hover {{
+    background-color: #ffaaaa !important;
+}}
 </style>
-<div style="margin: 10px 0;">
+<div style="margin: 10px 0;" id="dataframe-container-{selected_name}" 
+     data-df-name="{selected_name}" 
+     data-indices='{indices_str}' 
+     data-columns='{columns_str}'>
     <h3 style="font-family: sans-serif; color: #333; margin-bottom: 10px;">
         DataFrame: <code style="background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px;">{selected_name}</code>
     </h3>
     <p style="font-family: sans-serif; color: #666; font-size: 0.9em; margin-bottom: 15px;">
         Shape: {df.shape[0]} rows × {df.shape[1]} columns
         {"(showing first 100 rows)" if len(df) > 100 else ""}
+        <br>
+        <span style="font-size: 0.85em; color: #999;">Click cells to highlight them in red. Click again to unhighlight.</span>
     </p>
+    <div style="margin-bottom: 15px; text-align: right;">
+        <button id="commit-locked-cells-btn-{selected_name}" style="
+            background-color: #5cb85c;
+            color: white;
+            border: 1px solid #4cae4c;
+            border-radius: 4px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        " onmouseover="this.style.backgroundColor='#4cae4c'" onmouseout="this.style.backgroundColor='#5cb85c'">
+            ✓ Commit Locked Cells
+        </button>
+    </div>
     {html_table}
 </div>
 """
-                    display(HTML(styled_html))
+                    # Embed JavaScript directly in HTML to avoid Python string processing issues
+                    # Escape the JSON strings properly for JavaScript
+                    indices_js = json.dumps(display_indices).replace('"', '\\"')
+                    columns_js = json.dumps(display_columns).replace('"', '\\"')
+                    
+                    script_html = f"""
+<script>
+(function() {{
+    function initDataframeLock() {{
+        var container = document.getElementById('dataframe-container-{selected_name}');
+        if (!container) {{
+            setTimeout(initDataframeLock, 100);
+            return;
+        }}
+        
+        var dfName = container.getAttribute('data-df-name');
+        var rowIndices = JSON.parse(container.getAttribute('data-indices'));
+        var columnNames = JSON.parse(container.getAttribute('data-columns'));
+        var tableId = 'dataframe-view-' + dfName;
+        var table = document.getElementById(tableId);
+        
+        if (!table) {{
+            setTimeout(initDataframeLock, 100);
+            return;
+        }}
+        
+        function makeCellsClickable() {{
+            var tbody = table.querySelector('tbody');
+            if (!tbody) {{
+                setTimeout(makeCellsClickable, 100);
+                return;
+            }}
+            
+            var rows = tbody.querySelectorAll('tr');
+            rows.forEach(function(row, rowIdx) {{
+                var cells = row.querySelectorAll('td');
+                cells.forEach(function(cell, colIdx) {{
+                    if (cell.hasAttribute('data-clickable')) {{
+                        return;
+                    }}
+                    cell.setAttribute('data-clickable', 'true');
+                    
+                    var actualRowIdx = rowIndices[rowIdx];
+                    var actualColName = columnNames[colIdx];
+                    cell.setAttribute('data-row-idx', actualRowIdx);
+                    cell.setAttribute('data-col-name', actualColName);
+                    
+                    cell.addEventListener('click', function(e) {{
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (cell.classList.contains('locked')) {{
+                            cell.classList.remove('locked');
+                        }} else {{
+                            cell.classList.add('locked');
+                        }}
+                        updateCommitButton();
+                    }});
+                }});
+            }});
+            updateCommitButton();
+        }}
+        
+        function updateCommitButton() {{
+            var btn = document.getElementById('commit-locked-cells-btn-{selected_name}');
+            if (!btn) return;
+            var lockedCells = document.querySelectorAll('#' + tableId + ' tbody td.locked');
+            var count = lockedCells.length;
+            if (count > 0) {{
+                btn.disabled = false;
+                btn.textContent = '✓ Commit Locked Cells (' + count + ')';
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+            }} else {{
+                btn.disabled = true;
+                btn.textContent = '✓ Commit Locked Cells';
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+            }}
+        }}
+        
+        function commitLockedCells() {{
+            var lockedCells = document.querySelectorAll('#' + tableId + ' tbody td.locked');
+            var lockedData = [];
+            lockedCells.forEach(function(cell) {{
+                lockedData.push({{
+                    row_index: cell.getAttribute('data-row-idx'),
+                    column_name: cell.getAttribute('data-col-name'),
+                    value: cell.textContent.trim()
+                }});
+            }});
+            
+            if (typeof IPython !== 'undefined' && IPython.notebook && IPython.notebook.kernel) {{
+                var lockedJson = JSON.stringify(lockedData);
+                var code = 'import json\\\\n' +
+                    'from IPython import get_ipython\\\\n' +
+                    'ns = get_ipython().user_ns\\\\n' +
+                    'locked_json = ' + JSON.stringify(lockedJson) + '\\\\n' +
+                    'locked_cells = json.loads(locked_json)\\\\n' +
+                    'ns["locked_cells_data"] = ns.get("locked_cells_data", {{}})\\\\n' +
+                    'ns["locked_cells_data"]["' + dfName + '"] = locked_cells\\\\n' +
+                    'print("Committed " + str(len(locked_cells)) + " locked cell(s)")';
+                IPython.notebook.kernel.execute(code, {{silent: false}});
+            }}
+        }}
+        
+        setTimeout(function() {{
+            var commitBtn = document.getElementById('commit-locked-cells-btn-{selected_name}');
+            if (commitBtn) {{
+                commitBtn.addEventListener('click', commitLockedCells);
+            }}
+        }}, 500);
+        
+        setTimeout(makeCellsClickable, 100);
+        setTimeout(makeCellsClickable, 500);
+        setTimeout(makeCellsClickable, 1000);
+    }}
+    
+    initDataframeLock();
+}})();
+</script>
+"""
+                    
+                    # Combine HTML and script
+                    full_html = styled_html + script_html
+                    display(HTML(full_html))
                 else:
                     error_html = """
 <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important; font-size: 11px !important; color: #d32f2f; margin-top: 8px;">
@@ -430,7 +601,7 @@ if dataframes_list:
     ], layout=widgets.Layout(padding='10px'))
     
     accordion = widgets.Accordion(children=[widget_container])
-    accordion.set_title(0, 'DataFrame Viewer')
+    accordion.set_title(0, 'DataFrame Lock')
     accordion.selected_index = 0
     
     display(accordion)

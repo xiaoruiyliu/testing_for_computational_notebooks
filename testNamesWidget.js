@@ -98,6 +98,11 @@ define([
         applyStyles(listItem, Constants.STYLES.LIST_ITEM);
         listItem.css('font-family', Constants.STYLES.FONT_FAMILY);
         
+        // Style locked_cells test in orange
+        if (testName === 'locked_cells') {
+            listItem.css('color', '#ff8800'); // Orange color
+        }
+        
         // Create name span with code font
         var nameSpan = $('<span>')
             .css({
