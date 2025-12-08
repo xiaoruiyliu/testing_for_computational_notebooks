@@ -346,9 +346,15 @@ def on_proceed_click(b):
                     # Add data attributes to each cell by modifying the HTML
                     # We'll do this in JavaScript instead to avoid complex string manipulation
                     
+                    # Get existing locked cells for this DataFrame
+                    existing_locked_cells = []
+                    if 'locked_cells_data' in ns and selected_name in ns.get('locked_cells_data', {}):
+                        existing_locked_cells = ns['locked_cells_data'][selected_name]
+                    
                     # Store metadata as data attributes on the container
                     indices_str = json.dumps(display_indices)
                     columns_str = json.dumps(display_columns)
+                    locked_cells_str = json.dumps(existing_locked_cells)
                     
                     # Add styling
                     styled_html = f"""
@@ -402,7 +408,8 @@ def on_proceed_click(b):
 <div style="margin: 10px 0;" id="dataframe-container-{selected_name}" 
      data-df-name="{selected_name}" 
      data-indices='{indices_str}' 
-     data-columns='{columns_str}'>
+     data-columns='{columns_str}'
+     data-locked-cells='{locked_cells_str}'>
     <h3 style="font-family: sans-serif; color: #333; margin-bottom: 10px;">
         DataFrame: <code style="background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px;">{selected_name}</code>
     </h3>
@@ -463,6 +470,17 @@ def on_proceed_click(b):
                 return;
             }}
             
+            // Load existing locked cells from data attribute
+            var existingLockedCells = [];
+            try {{
+                var lockedCellsAttr = container.getAttribute('data-locked-cells');
+                if (lockedCellsAttr) {{
+                    existingLockedCells = JSON.parse(lockedCellsAttr);
+                }}
+            }} catch(e) {{
+                console.error('Error parsing existing locked cells:', e);
+            }}
+            
             var rows = tbody.querySelectorAll('tr');
             rows.forEach(function(row, rowIdx) {{
                 var cells = row.querySelectorAll('td');
@@ -476,6 +494,15 @@ def on_proceed_click(b):
                     var actualColName = columnNames[colIdx];
                     cell.setAttribute('data-row-idx', actualRowIdx);
                     cell.setAttribute('data-col-name', actualColName);
+                    
+                    // Check if this cell should be locked based on existing data
+                    var isLocked = existingLockedCells.some(function(locked) {{
+                        return String(locked.row_index) === String(actualRowIdx) && 
+                               String(locked.column_name) === String(actualColName);
+                    }});
+                    if (isLocked) {{
+                        cell.classList.add('locked');
+                    }}
                     
                     cell.addEventListener('click', function(e) {{
                         e.preventDefault();
@@ -531,35 +558,27 @@ def on_proceed_click(b):
                     'ns["locked_cells_data"] = ns.get("locked_cells_data", {{}})\\\\n' +
                     'df_name = "' + dfName + '"\\\\n' +
                     '\\\\n' +
-                    '# Get existing locked cells for this DataFrame\\\\n' +
-                    'existing_locked_cells = ns["locked_cells_data"].get(df_name, [])\\\\n' +
-                    '\\\\n' +
-                    '# Create a dictionary for quick lookup by (row_index, column_name)\\\\n' +
-                    'existing_dict = {{}}\\\\n' +
-                    'for cell in existing_locked_cells:\\\\n' +
-                    '    key = (str(cell.get("row_index", "")), str(cell.get("column_name", "")))\\\\n' +
-                    '    existing_dict[key] = cell\\\\n' +
-                    '\\\\n' +
-                    '# Update or add new locked cells\\\\n' +
-                    'for new_cell in new_locked_cells:\\\\n' +
-                    '    key = (str(new_cell.get("row_index", "")), str(new_cell.get("column_name", "")))\\\\n' +
-                    '    existing_dict[key] = new_cell  # Update if exists, add if new\\\\n' +
-                    '\\\\n' +
-                    '# Convert back to list and store\\\\n' +
-                    'ns["locked_cells_data"][df_name] = list(existing_dict.values())\\\\n' +
-                    'total_count = len(ns["locked_cells_data"][df_name])\\\\n' +
-                    'new_count = len(new_locked_cells)\\\\n' +
-                    'print("Committed " + str(new_count) + " locked cell(s). Total: " + str(total_count) + " locked cell(s) for dataframe \\\\"" + df_name + "\\\\"")';
+                    '# Replace the entire list for this DataFrame with the new selection\\\\n' +
+                    '# This ensures unselected cells are removed\\\\n' +
+                    'ns["locked_cells_data"][df_name] = new_locked_cells\\\\n' +
+                    '# Also update globals() for consistency\\\\n' +
+                    'if "locked_cells_data" not in globals():\\\\n' +
+                    '    globals()["locked_cells_data"] = {{}}\\\\n' +
+                    'globals()["locked_cells_data"][df_name] = new_locked_cells\\\\n' +
+                    'total_count = len(new_locked_cells)\\\\n' +
+                    'print("Committed " + str(total_count) + " locked cell(s) for dataframe \\\\"" + df_name + "\\\\"")';
                 IPython.notebook.kernel.execute(code, {{
                     iopub: {{
                         output: function(msg) {{
                             if (msg.content && msg.content.name === 'stdout') {{
-                                // After commit completes, trigger locked cells test update
-                                setTimeout(function() {{
-                                    if (window.lockedCellsTestManager && window.lockedCellsTestManager.updateLockedCellsTest) {{
+                                // After commit completes, trigger locked cells test update immediately
+                                if (window.lockedCellsTestManager && window.lockedCellsTestManager.updateLockedCellsTest) {{
+                                    // Call immediately and also with a small delay to ensure data is fully committed
+                                    window.lockedCellsTestManager.updateLockedCellsTest();
+                                    setTimeout(function() {{
                                         window.lockedCellsTestManager.updateLockedCellsTest();
-                                    }}
-                                }}, 100);
+                                    }}, 100);
+                                }}
                             }}
                         }}
                     }},

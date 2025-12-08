@@ -26,24 +26,34 @@ import sys
 from IPython import get_ipython
 
 ns = get_ipython().user_ns
+globals_dict = globals()
+
+# Get locked_cells_data from namespace (primary source)
+locked_cells_data = ns.get("locked_cells_data", {})
+
+# If not in namespace, check globals
+if not locked_cells_data and "locked_cells_data" in globals_dict:
+    locked_cells_data = globals_dict["locked_cells_data"]
 
 try:
     # Build test assertions from all locked cells across all DataFrames
+    # This should exactly mirror what's in locked_cells_data
     test_assertions = []
     
-    if "locked_cells_data" in ns:
-        for df_name_key, locked_cells_list in ns["locked_cells_data"].items():
+    if locked_cells_data:
+        for df_name_key, locked_cells_list in locked_cells_data.items():
             # Verify the DataFrame exists in namespace
             if df_name_key in ns:
                 df = ns[df_name_key]
                 # Check if it's a DataFrame-like object (has .loc attribute)
                 if hasattr(df, 'loc'):
                     for locked in locked_cells_list:
+                        # Use the exact values from locked_cells_data without modification
                         row_idx = locked.get("row_index")
                         col_name = str(locked.get("column_name", ""))
                         value_str = str(locked.get("value", ""))
                         
-                        # Try to convert row_index to appropriate type
+                        # Try to convert row_index to appropriate type for .loc access
                         try:
                             if isinstance(row_idx, str):
                                 try:
@@ -57,6 +67,7 @@ try:
                             pass  # Keep original type
                         
                         # Try to convert value to appropriate type for assertion
+                        # Match the exact value stored in locked_cells_data
                         try:
                             # Try numeric (int or float)
                             if "." in value_str:
@@ -79,19 +90,24 @@ try:
                         assertion = f"assert {df_name_key}.loc[{row_idx_repr}, {repr(col_name)}] == {value_repr}"
                         test_assertions.append(assertion)
     
-    # Store test in tests dictionary
+    # Store test in both namespace and globals for consistency
     if "tests" not in ns:
         ns["tests"] = {}
+    if "tests" not in globals_dict:
+        globals_dict["tests"] = {}
     
     if test_assertions:
         # Combine all assertions with newlines (separate assert statements)
         test_code = "\\n".join(test_assertions)
         ns["tests"]["locked_cells"] = test_code
+        globals_dict["tests"]["locked_cells"] = test_code
         print(json.dumps({"success": True, "test_name": "locked_cells", "assertion_count": len(test_assertions)}))
     else:
         # No locked cells, remove test if it exists
         if "locked_cells" in ns.get("tests", {}):
             del ns["tests"]["locked_cells"]
+        if "locked_cells" in globals_dict.get("tests", {}):
+            del globals_dict["tests"]["locked_cells"]
         print(json.dumps({"success": True, "test_name": "locked_cells", "assertion_count": 0, "removed": True}))
     
     sys.stdout.flush()
