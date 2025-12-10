@@ -22,86 +22,52 @@ Proof with eauto.
     eapply S_Trans...
 Qed.
 
-(** Inversion lemma for fst projection - extracts first component type *)
-Lemma typing_inversion_fst : forall Gamma t T,
-    <{ Gamma |-- t.fst \in T }> ->
-    exists T1 T2,
-      <{ Gamma |-- t \in T1 * T2 }> /\
-      T1 <: T.
+(** Direct inversion lemmas for pair typing *)
+
+Lemma pair_has_type_fst : forall Gamma v1 v2 T1 T2,
+    value v1 -> value v2 ->
+    <{ Gamma |-- (v1, v2) \in T1 * T2 }> ->
+    <{ Gamma |-- v1 \in T1 }>.
 Proof with eauto.
-  intros Gamma t T HT.
-  remember (tm_fst t) as tfst eqn:Heqt.
-  induction HT; try discriminate.
-  - (* T_Fst *)
-    injection Heqt as ->.
-    exists T1, T2. split...
-    apply S_Refl.
+  intros Gamma v1 v2 T1 T2 Hv1 Hv2 HT.
+  remember (tm_pair v1 v2) as t eqn:Heqt.
+  remember (ty_prod T1 T2) as T eqn:HeqT.
+  generalize dependent T2. generalize dependent T1.
+  generalize dependent v2. generalize dependent v1.
+  induction HT; intros; try discriminate.
+  - (* T_Pair *)
+    injection Heqt as -> ->. injection HeqT as -> ->.
+    assumption.
   - (* T_Sub *)
-    destruct (IHHT Heqt) as [T1' [T2' [Ht Hsub]]].
-    exists T1', T2'. split...
-    eapply S_Trans...
+    subst T0.
+    destruct T1; try discriminate.
+    injection HeqT as -> ->.
+    apply T_Sub with T1_1.
+    + apply IHHT with v2... 
+    + inversion H; subst...
 Qed.
 
-(** Inversion lemma for snd projection - extracts second component type *)
-Lemma typing_inversion_snd : forall Gamma t T,
-    <{ Gamma |-- t.snd \in T }> ->
-    exists T1 T2,
-      <{ Gamma |-- t \in T1 * T2 }> /\
-      T2 <: T.
+Lemma pair_has_type_snd : forall Gamma v1 v2 T1 T2,
+    value v1 -> value v2 ->
+    <{ Gamma |-- (v1, v2) \in T1 * T2 }> ->
+    <{ Gamma |-- v2 \in T2 }>.
 Proof with eauto.
-  intros Gamma t T HT.
-  remember (tm_snd t) as tsnd eqn:Heqt.
-  induction HT; try discriminate.
-  - (* T_Snd *)
-    injection Heqt as ->.
-    exists T1, T2. split...
-    apply S_Refl.
+  intros Gamma v1 v2 T1 T2 Hv1 Hv2 HT.
+  remember (tm_pair v1 v2) as t eqn:Heqt.
+  remember (ty_prod T1 T2) as T eqn:HeqT.
+  generalize dependent T2. generalize dependent T1.
+  generalize dependent v2. generalize dependent v1.
+  induction HT; intros; try discriminate.
+  - (* T_Pair *)
+    injection Heqt as -> ->. injection HeqT as -> ->.
+    assumption.
   - (* T_Sub *)
-    destruct (IHHT Heqt) as [T1' [T2' [Ht Hsub]]].
-    exists T1', T2'. split...
-    eapply S_Trans...
-Qed.
-
-(** Subtyping inversion for product types *)
-Lemma sub_inversion_prod : forall S1 S2 T,
-    <{{ S1 * S2 }}> <: T ->
-    (T = <{{ Top }}>) \/
-    (exists T1 T2, T = <{{ T1 * T2 }}> /\ S1 <: T1 /\ S2 <: T2).
-Proof with eauto.
-  intros S1 S2 T Hsub.
-  remember (ty_prod S1 S2) as S eqn:HeqS.
-  generalize dependent S2. generalize dependent S1.
-  induction Hsub; intros S1' S2' HeqS; subst.
-  - (* S_Refl *)
-    right. exists S1', S2'. split... split...
-  - (* S_Trans *)
-    destruct U; try (left; reflexivity).
-    + (* U = Top *)
-      destruct (IHHsub1 S1' S2' eq_refl).
-      * subst. inversion Hsub2.
-      * left. reflexivity.
-    + (* U = Prod U1 U2 *)
-      destruct (IHHsub1 S1' S2' eq_refl).
-      * discriminate.
-      * destruct H as [T1' [T2' [Heq [Hsub1' Hsub2']]]].
-        injection Heq as -> ->.
-        inversion Hsub2; subst.
-        -- right. exists U1, U2. split... split...
-        -- (* S_Trans case *)
-           destruct (IHHsub2 U1 U2 eq_refl).
-           ++ left. reflexivity.
-           ++ destruct H as [T1'' [T2'' [Heq [HsubT1 HsubT2]]]].
-              right. exists T1'', T2''. split...
-              split; eapply S_Trans...
-        -- right. exists <{{ Top }}>, <{{ Top }}>. split... split...
-           apply S_Top. apply S_Top.
-        -- right. exists T1, T2. split... split; eapply S_Trans...
-  - (* S_Top *)
-    left. reflexivity.
-  - (* S_Arrow *)
-    discriminate.
-  - (* S_Prod *)
-    right. exists T1, T2. split... split...
+    subst T0.
+    destruct T1; try discriminate.
+    injection HeqT as -> ->.
+    apply T_Sub with T1_2.
+    + apply IHHT with v1...
+    + inversion H; subst...
 Qed.
 
 (* ================================================================= *)
@@ -127,31 +93,13 @@ Proof with eauto.
   - (* T_Fst *)
     inversion HE; subst...
     + (* ST_FstPair *)
-      (* We have: empty |- (v1, v2) : T1 * T2 *)
-      (* Need to show: empty |- v1 : T1 *)
-      destruct (typing_inversion_pair _ _ _ _ H H0 HT) 
-        as [S1 [S2 [HS1 [HS2 HSub]]]].
-      (* Now we have: S1 * S2 <: T1 * T2 *)
-      destruct (sub_inversion_prod _ _ _ HSub) as [HTop | [T1' [T2' [Heq [HsubT1 HsubT2]]]]].
-      * (* Case: T1 * T2 = Top - contradiction *)
-        discriminate HTop.
-      * (* Case: T1 * T2 = T1' * T2' and S1 <: T1', S2 <: T2' *)
-        injection Heq as -> ->.
-        apply T_Sub with S1...
+      (* Direct application - no subtyping inversion needed *)
+      eapply pair_has_type_fst; eauto.
   - (* T_Snd *)
     inversion HE; subst...
     + (* ST_SndPair *)
-      (* We have: empty |- (v1, v2) : T1 * T2 *)
-      (* Need to show: empty |- v2 : T2 *)
-      destruct (typing_inversion_pair _ _ _ _ H H0 HT) 
-        as [S1 [S2 [HS1 [HS2 HSub]]]].
-      (* Now we have: S1 * S2 <: T1 * T2 *)
-      destruct (sub_inversion_prod _ _ _ HSub) as [HTop | [T1' [T2' [Heq [HsubT1 HsubT2]]]]].
-      * (* Case: T1 * T2 = Top - contradiction *)
-        discriminate HTop.
-      * (* Case: T1 * T2 = T1' * T2' and S1 <: T1', S2 <: T2' *)
-        injection Heq as -> ->.
-        apply T_Sub with S2...
+      (* Direct application - no subtyping inversion needed *)
+      eapply pair_has_type_snd; eauto.
   - (* T_Sub *)
     (* If Gamma |- t : T1 and T1 <: T2 and t --> t',
        then by IH, Gamma |- t' : T1, 
